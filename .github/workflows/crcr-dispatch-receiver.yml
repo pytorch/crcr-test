@@ -1,87 +1,56 @@
-name: CRCR Dispatch Receiver
-
-run-name: >-
-  CRCR Dispatch -
-  ${{
-    github.event.client_payload.event_type == 'pull_request' &&
-    format(
-      'PR #{0} ({1})',
-      github.event.client_payload.payload.pull_request.number,
-      github.event.client_payload.payload.action
-    ) ||
-    github.event.client_payload.event_type == 'push' &&
-    format('Push {0}', github.event.client_payload.payload.after) ||
-    format('Event: {0}', github.event.client_payload.event_type)
-  }}
+name: PyTorch Out-of-Tree Dispatch
 
 on:
   repository_dispatch:
-    types: [pull_request, push]
+    types:
+      - push
+      # - pull_request  # uncomment when relay starts sending PR events
 
-concurrency:
-  group: >-
-    crcr-${{ github.event.client_payload.payload.repository.full_name }}-${{
-    github.event.client_payload.payload.pull_request.number || github.run_id }}
-  cancel-in-progress: true
+run-name: Dispatch - ${{ github.event.client_payload.payload.ref }}
 
 permissions:
-  contents: read
-  id-token: write
+  actions: write
 
 jobs:
-  cancel-on-close:
-    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+  inspect:
     runs-on: ubuntu-latest
     steps:
-      - run: echo "PR closed — canceling older runs in the same concurrency group."
-
-  inspect-dispatch:
-    if: ${{ github.event.client_payload.payload.action != 'closed' }}
-    runs-on: ubuntu-latest
-    steps:
-      - name: Dump event type
+      - name: Validate dispatch payload
+        id: validate
         run: |
-          echo "=== Event Type ==="
-          echo "${{ github.event.client_payload.event_type }}"
+          set -x
+          if ${{ github.event.client_payload.payload.repository.full_name == 'pytorch/pytorch' && github.event.client_payload.event_type == 'push' && !github.event.client_payload.payload.deleted }}; then
+            test "${{ github.event.client_payload.payload.after }}" != "0000000000000000000000000000000000000000" || \
+              (echo "github.event.client_payload.payload.after should not be all zeroes"; exit 1)
+            echo "sha=${{ github.event.client_payload.payload.after }}" >> $GITHUB_OUTPUT
+            echo "ref=${{ github.event.client_payload.payload.ref }}" >> $GITHUB_OUTPUT
+            echo "valid=true" >> $GITHUB_OUTPUT
+          else
+            echo "valid=false" >> $GITHUB_OUTPUT
+          fi
 
-      - name: Dump dispatch metadata
+      - name: Display parsed fields
+        if: steps.validate.outputs.valid == 'true'
         run: |
-          echo "=== Delivery ID ==="
-          echo "${{ github.event.client_payload.delivery_id }}"
-          echo ""
-          echo "=== Upstream Repo ==="
-          echo "${{ github.event.client_payload.payload.repository.full_name }}"
+          echo "### Dispatch Summary" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Event type | \`${{ github.event.client_payload.event_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Upstream repo | \`${{ github.event.client_payload.payload.repository.full_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Ref | \`${{ steps.validate.outputs.ref }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA | \`${{ steps.validate.outputs.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Deleted | \`${{ github.event.client_payload.payload.deleted }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Base ref | \`${{ github.event.client_payload.payload.base_ref }}\` |" >> $GITHUB_STEP_SUMMARY
 
-      - name: Dump PR info (if pull_request)
-        if: ${{ github.event.client_payload.event_type == 'pull_request' }}
+      - name: Log full event to step summary
+        if: always()
         run: |
-          echo "=== PR Number ==="
-          echo "${{ github.event.client_payload.payload.pull_request.number }}"
-          echo ""
-          echo "=== PR Action ==="
-          echo "${{ github.event.client_payload.payload.action }}"
-          echo ""
-          echo "=== PR Head SHA ==="
-          echo "${{ github.event.client_payload.payload.pull_request.head.sha }}"
-          echo ""
-          echo "=== PR Head Repo ==="
-          echo "${{ github.event.client_payload.payload.pull_request.head.repo.full_name }}"
-          echo ""
-          echo "=== PR Title ==="
-          echo "${{ github.event.client_payload.payload.pull_request.title }}"
-
-      - name: Dump push info (if push)
-        if: ${{ github.event.client_payload.event_type == 'push' }}
-        run: |
-          echo "=== Push Ref ==="
-          echo "${{ github.event.client_payload.payload.ref }}"
-          echo ""
-          echo "=== After SHA ==="
-          echo "${{ github.event.client_payload.payload.after }}"
-
-      - name: Dump full client_payload as JSON
-        env:
-          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
-        run: |
-          echo "=== Full client_payload ==="
-          echo "$CLIENT_PAYLOAD" | python3 -m json.tool
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full Event Payload" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat <<'EOF' >> $GITHUB_STEP_SUMMARY
+          ```json
+          ${{ toJson(github.event) }}
+          ```
+          EOF
