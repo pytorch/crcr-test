@@ -3,10 +3,20 @@ name: PyTorch Out-of-Tree Dispatch
 on:
   repository_dispatch:
     types:
+      - pull_request
       - push
-      # - pull_request  # uncomment when relay starts sending PR events
 
-run-name: Dispatch - ${{ github.event.client_payload.payload.ref }}
+run-name: >-
+  Dispatch -
+  ${{
+    github.event.client_payload.event_type == 'pull_request' &&
+    format(
+      'PR #{0} ({1})',
+      github.event.client_payload.payload.pull_request.number,
+      github.event.client_payload.payload.action
+    ) ||
+    github.event.client_payload.payload.ref
+  }}
 
 permissions:
   actions: write
@@ -15,33 +25,28 @@ jobs:
   inspect:
     runs-on: ubuntu-latest
     steps:
-      - name: Validate dispatch payload
-        id: validate
-        run: |
-          set -x
-          if ${{ github.event.client_payload.payload.repository.full_name == 'pytorch/pytorch' && github.event.client_payload.event_type == 'push' && !github.event.client_payload.payload.deleted }}; then
-            test "${{ github.event.client_payload.payload.after }}" != "0000000000000000000000000000000000000000" || \
-              (echo "github.event.client_payload.payload.after should not be all zeroes"; exit 1)
-            echo "sha=${{ github.event.client_payload.payload.after }}" >> $GITHUB_OUTPUT
-            echo "ref=${{ github.event.client_payload.payload.ref }}" >> $GITHUB_OUTPUT
-            echo "valid=true" >> $GITHUB_OUTPUT
-          else
-            echo "valid=false" >> $GITHUB_OUTPUT
-          fi
-
       - name: Display parsed fields
-        if: steps.validate.outputs.valid == 'true'
         run: |
+          EVENT_TYPE="${{ github.event.client_payload.event_type }}"
           echo "### Dispatch Summary" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
           echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Event type | \`${{ github.event.client_payload.event_type }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Event type | \`${EVENT_TYPE}\` |" >> $GITHUB_STEP_SUMMARY
           echo "| Upstream repo | \`${{ github.event.client_payload.payload.repository.full_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Ref | \`${{ steps.validate.outputs.ref }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| SHA | \`${{ steps.validate.outputs.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Deleted | \`${{ github.event.client_payload.payload.deleted }}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Base ref | \`${{ github.event.client_payload.payload.base_ref }}\` |" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$EVENT_TYPE" = "pull_request" ]; then
+            echo "| PR number | \`${{ github.event.client_payload.payload.pull_request.number }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| PR action | \`${{ github.event.client_payload.payload.action }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| PR title | \`${{ github.event.client_payload.payload.pull_request.title }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Head SHA | \`${{ github.event.client_payload.payload.pull_request.head.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Head repo | \`${{ github.event.client_payload.payload.pull_request.head.repo.full_name }}\` |" >> $GITHUB_STEP_SUMMARY
+          elif [ "$EVENT_TYPE" = "push" ]; then
+            echo "| Ref | \`${{ github.event.client_payload.payload.ref }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| SHA | \`${{ github.event.client_payload.payload.after }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Base ref | \`${{ github.event.client_payload.payload.base_ref }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| Deleted | \`${{ github.event.client_payload.payload.deleted }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
 
       - name: Log full event to step summary
         if: always()
