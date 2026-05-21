@@ -29,10 +29,10 @@ permissions:
 
 jobs:
   cancel-pr:
-      if: ${{ github.event.client_payload.payload.action == 'closed' }}
-      runs-on: ubuntu-latest
-      steps:
-        - run: echo "PR closed, canceling older runs in the same concurrency group"
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed, canceling older runs in the same concurrency group"
   inspect:
     if: ${{ github.event.client_payload.payload.action != 'closed' }}
     runs-on: ubuntu-latest
