@@ -220,6 +220,6 @@ For questions about onboarding, installation approval, or promotion to higher tr
 
 - **[@albanD](https://github.com/albanD)** — PyTorch Core Maintainer
 - **[@atalman](https://github.com/atalman)** — PyTorch Dev Infra
-- **[@subinz1](https://github.com/subinz1)**
 - **[@groenenboomj](https://github.com/groenenboomj)**
 - **[@jewelkm89](https://github.com/jewelkm89)**
+- **[@subinz1](https://github.com/subinz1)**
