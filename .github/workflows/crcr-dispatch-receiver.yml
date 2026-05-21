@@ -28,7 +28,7 @@ permissions:
   actions: write
 
 jobs:
-  cancel-pr:
+  cancel-workflow:
     if: ${{ github.event.client_payload.payload.action == 'closed' }}
     runs-on: ubuntu-latest
     steps:
