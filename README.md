@@ -108,7 +108,7 @@ jobs:
     steps:
       - run: echo "PR closed, canceling older runs in the same concurrency group"
   build-and-test:
-    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}  # listen to the specific action types you need (opened, reopened, synchronize ...)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout your repository
@@ -203,7 +203,7 @@ For `pull_request` events:
 | Push ref | `github.event.client_payload.payload.ref` | Git ref (e.g., `refs/tags/ciflow/trunk/12345`) |
 | Push SHA | `github.event.client_payload.payload.after` | Commit SHA for push events |
 | PR number | `github.event.client_payload.payload.pull_request.number` | PR number for pull_request events |
-| PR action | `github.event.client_payload.payload.action` | `opened`, `synchronize`, `closed` |
+| PR action | `github.event.client_payload.payload.action` | passthrough all action types from the webhook, please refer to [here](https://docs.github.com/en/webhooks/webhook-events-and-payloads#pull_request) |
 | PR head SHA | `github.event.client_payload.payload.pull_request.head.sha` | Head commit SHA of the PR |
 | PR head repo | `github.event.client_payload.payload.pull_request.head.repo.full_name` | Fork repo (if applicable) |
 
