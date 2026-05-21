@@ -66,7 +66,7 @@ L1:
 Create a GitHub Actions workflow in your repository that listens for `repository_dispatch` events. The relay sends two event types:
 
 - **`push`** — Triggered when code is pushed to `main` or ciflow tags are created (e.g., `refs/tags/ciflow/trunk/<pr_number>`)
-- **`pull_request`** — Triggered when a PR is opened, synchronized, or closed
+- **`pull_request`** — Triggered when a PR is opened, reopened, synchronized, or closed
 
 Create `.github/workflows/out-of-tree-ci.yml` in your repository:
 
@@ -91,12 +91,24 @@ run-name: >-
     github.event.client_payload.payload.ref
   }}
 
+concurrency:
+  group: >-
+    oot-${{ github.event.client_payload.payload.repository.full_name }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   actions: write
   id-token: write   # required for L2+ callback authentication (OIDC)
 
 jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed, canceling older runs in the same concurrency group"
   build-and-test:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}  # listen to the specific action types you need (opened, reopened, synchronize)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout your repository
@@ -191,7 +203,7 @@ For `pull_request` events:
 | Push ref | `github.event.client_payload.payload.ref` | Git ref (e.g., `refs/tags/ciflow/trunk/12345`) |
 | Push SHA | `github.event.client_payload.payload.after` | Commit SHA for push events |
 | PR number | `github.event.client_payload.payload.pull_request.number` | PR number for pull_request events |
-| PR action | `github.event.client_payload.payload.action` | `opened`, `synchronize`, `closed` |
+| PR action | `github.event.client_payload.payload.action` | `opened`, `reopened`, `synchronize`, `closed` |
 | PR head SHA | `github.event.client_payload.payload.pull_request.head.sha` | Head commit SHA of the PR |
 | PR head repo | `github.event.client_payload.payload.pull_request.head.repo.full_name` | Fork repo (if applicable) |
 
