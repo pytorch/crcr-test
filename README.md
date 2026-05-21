@@ -91,12 +91,24 @@ run-name: >-
     github.event.client_payload.payload.ref
   }}
 
+concurrency:
+  group: >-
+    oot-${{ github.event.client_payload.payload.repository.full_name }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
 permissions:
   actions: write
   id-token: write   # required for L2+ callback authentication (OIDC)
 
 jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed, canceling older runs in the same concurrency group"
   build-and-test:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout your repository
