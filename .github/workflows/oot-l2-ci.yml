@@ -1,0 +1,122 @@
+name: OOT L2 CI
+
+on:
+  repository_dispatch:
+    types:
+      - pull_request
+
+run-name: >-
+  OOT L2 -
+  PR #${{ github.event.client_payload.payload.pull_request.number }}
+  (${{ github.event.client_payload.payload.action }})
+
+concurrency:
+  group: >-
+    oot-l2-${{ github.event.client_payload.payload.repository.full_name }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  id-token: write
+
+jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed — canceling older runs in the same concurrency group"
+
+  build-and-test:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report CI started
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          callback-url: ${{ secrets.CRCR_CALLBACK_URL }}
+          status: in_progress
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Checkout PyTorch at dispatched SHA
+        uses: actions/checkout@v4
+        with:
+          repository: pytorch/pytorch
+          ref: ${{ github.event.client_payload.payload.pull_request.head.sha }}
+          path: pytorch
+
+      - name: Generate random test configuration
+        id: config
+        run: |
+          SEED=$(( RANDOM ^ ${{ github.run_id }} ))
+          TOTAL=$(( (SEED % 400) + 100 ))
+          FAIL_RATE=$(( SEED % 12 ))
+          FAILED=$(( TOTAL * FAIL_RATE / 100 ))
+          SKIP_RATE=$(( (SEED / 7) % 5 ))
+          SKIPPED=$(( TOTAL * SKIP_RATE / 100 ))
+          PASSED=$(( TOTAL - FAILED - SKIPPED ))
+          SLEEP_SECS=$(( (SEED % 45) + 15 ))
+          echo "total=$TOTAL" >> "$GITHUB_OUTPUT"
+          echo "passed=$PASSED" >> "$GITHUB_OUTPUT"
+          echo "failed=$FAILED" >> "$GITHUB_OUTPUT"
+          echo "skipped=$SKIPPED" >> "$GITHUB_OUTPUT"
+          echo "sleep=$SLEEP_SECS" >> "$GITHUB_OUTPUT"
+          echo "### Test Configuration" >> $GITHUB_STEP_SUMMARY
+          echo "| Param | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Total tests | $TOTAL |" >> $GITHUB_STEP_SUMMARY
+          echo "| Passed | $PASSED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Failed | $FAILED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Skipped | $SKIPPED |" >> $GITHUB_STEP_SUMMARY
+          echo "| Simulated duration | ${SLEEP_SECS}s |" >> $GITHUB_STEP_SUMMARY
+
+      - name: Simulate build
+        run: |
+          echo "=== Building against PyTorch SHA: ${{ github.event.client_payload.payload.pull_request.head.sha }} ==="
+          echo "Installing dependencies..."
+          sleep $(( (RANDOM % 5) + 2 ))
+          echo "Compiling OOT extensions..."
+          sleep $(( (RANDOM % 5) + 2 ))
+          echo "Build complete."
+
+      - name: Simulate test execution
+        id: tests
+        run: |
+          echo "=== Running ${{ steps.config.outputs.total }} tests ==="
+          sleep ${{ steps.config.outputs.sleep }}
+
+          FAILED=${{ steps.config.outputs.failed }}
+          if [ "$FAILED" -gt 0 ]; then
+            echo "::warning::$FAILED test(s) failed"
+            for i in $(seq 1 $FAILED); do
+              echo "FAIL: test_op_$(( RANDOM % 999 )) (TestOOTBackend)"
+            done
+            echo "outcome=failure" >> "$GITHUB_OUTPUT"
+          else
+            echo "All tests passed."
+            echo "outcome=success" >> "$GITHUB_OUTPUT"
+          fi
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "- **Passed:** ${{ steps.config.outputs.passed }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Failed:** ${{ steps.config.outputs.failed }}" >> $GITHUB_STEP_SUMMARY
+          echo "- **Skipped:** ${{ steps.config.outputs.skipped }}" >> $GITHUB_STEP_SUMMARY
+
+      - name: Report CI completed
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          callback-url: ${{ secrets.CRCR_CALLBACK_URL }}
+          status: completed
+          conclusion: ${{ steps.tests.outputs.outcome || (job.status == 'success' && 'success' || 'failure') }}
+          test-results: >-
+            {
+              "passed": ${{ steps.config.outputs.passed || 0 }},
+              "failed": ${{ steps.config.outputs.failed || 0 }},
+              "skipped": ${{ steps.config.outputs.skipped || 0 }},
+              "total": ${{ steps.config.outputs.total || 0 }}
+            }
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
