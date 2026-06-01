@@ -85,25 +85,40 @@ jobs:
         id: tests
         run: |
           echo "=== Running ${{ steps.config.outputs.total }} tests ==="
-          sleep ${{ steps.config.outputs.sleep }}
 
-          FAILED=${{ steps.config.outputs.failed }}
-          if [ "$FAILED" -gt 0 ]; then
-            echo "::warning::$FAILED test(s) failed"
-            for i in $(seq 1 $FAILED); do
-              echo "FAIL: test_op_$(( RANDOM % 999 )) (TestOOTBackend)"
-            done
-            echo "outcome=failure" >> "$GITHUB_OUTPUT"
+          EDGE_ROLL=$(( RANDOM % 20 ))
+          if [ "$EDGE_ROLL" -eq 0 ]; then
+            echo "::notice::Simulating edge case: cancelled"
+            echo "outcome=cancelled" >> "$GITHUB_OUTPUT"
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "- **Outcome:** cancelled (simulated edge case)" >> $GITHUB_STEP_SUMMARY
+          elif [ "$EDGE_ROLL" -eq 1 ]; then
+            sleep ${{ steps.config.outputs.sleep }}
+            echo "::notice::Simulating edge case: timed_out"
+            echo "outcome=timed_out" >> "$GITHUB_OUTPUT"
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "- **Outcome:** timed_out (simulated edge case)" >> $GITHUB_STEP_SUMMARY
           else
-            echo "All tests passed."
-            echo "outcome=success" >> "$GITHUB_OUTPUT"
+            sleep ${{ steps.config.outputs.sleep }}
+            FAILED=${{ steps.config.outputs.failed }}
+            if [ "$FAILED" -gt 0 ]; then
+              echo "::warning::$FAILED test(s) failed"
+              for i in $(seq 1 $FAILED); do
+                echo "FAIL: test_op_$(( RANDOM % 999 )) (TestOOTBackend)"
+              done
+              echo "outcome=failure" >> "$GITHUB_OUTPUT"
+            else
+              echo "All tests passed."
+              echo "outcome=success" >> "$GITHUB_OUTPUT"
+            fi
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### Test Results" >> $GITHUB_STEP_SUMMARY
+            echo "- **Passed:** ${{ steps.config.outputs.passed }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Failed:** ${{ steps.config.outputs.failed }}" >> $GITHUB_STEP_SUMMARY
+            echo "- **Skipped:** ${{ steps.config.outputs.skipped }}" >> $GITHUB_STEP_SUMMARY
           fi
-
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Test Results" >> $GITHUB_STEP_SUMMARY
-          echo "- **Passed:** ${{ steps.config.outputs.passed }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Failed:** ${{ steps.config.outputs.failed }}" >> $GITHUB_STEP_SUMMARY
-          echo "- **Skipped:** ${{ steps.config.outputs.skipped }}" >> $GITHUB_STEP_SUMMARY
 
       - name: Report CI completed
         if: always()
