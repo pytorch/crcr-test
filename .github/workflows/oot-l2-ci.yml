@@ -34,7 +34,6 @@ jobs:
       - name: Report CI started
         uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
         with:
-          callback-url: ${{ secrets.CRCR_CALLBACK_URL }}
           status: in_progress
 
       - name: Checkout
@@ -124,7 +123,6 @@ jobs:
         if: always()
         uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
         with:
-          callback-url: ${{ secrets.CRCR_CALLBACK_URL }}
           status: completed
           conclusion: ${{ steps.tests.outputs.outcome || (job.status == 'success' && 'success' || 'failure') }}
           test-results: >-
