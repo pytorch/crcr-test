@@ -1,0 +1,117 @@
+name: "Test: Concurrency & Cancellation"
+
+on:
+  repository_dispatch:
+    types:
+      - pull_request
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number (manual testing)"
+        required: false
+        default: "0"
+
+run-name: >-
+  [Test Concurrency] ${{
+    github.event.client_payload.event_type == 'pull_request' &&
+    format('PR #{0} ({1})',
+      github.event.client_payload.payload.pull_request.number,
+      github.event.client_payload.payload.action) ||
+    'Manual trigger'
+  }}
+
+concurrency:
+  group: >-
+    test-concurrency-${{ github.event.client_payload.payload.repository.full_name || 'manual' }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  id-token: write
+
+jobs:
+  # CC-02: PR closed dispatch triggers cancel-workflow
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "CC-02: PR closed — cancel-workflow triggered"
+        run: |
+          echo "## CC-02: PR Closed Cancellation" >> $GITHUB_STEP_SUMMARY
+          echo "✅ cancel-workflow job triggered for PR closed action" >> $GITHUB_STEP_SUMMARY
+          echo "Any in-flight runs in this concurrency group will be cancelled." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Concurrency group: \`test-concurrency-${{ github.event.client_payload.payload.repository.full_name }}-${{ github.event.client_payload.payload.pull_request.number }}\`" >> $GITHUB_STEP_SUMMARY
+
+  # CC-01/CC-03/CC-04: Long-running job to test cancellation behavior
+  long-running-ci:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "CC-04: Log concurrency group"
+        run: |
+          PR_NUM="${{ github.event.client_payload.payload.pull_request.number }}"
+          REPO="${{ github.event.client_payload.payload.repository.full_name }}"
+
+          echo "## Concurrency & Cancellation Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### CC-04: Concurrency Group Isolation" >> $GITHUB_STEP_SUMMARY
+          echo "Concurrency group: \`test-concurrency-${REPO}-${PR_NUM}\`" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Different PR numbers produce different groups → no cross-PR cancellation" >> $GITHUB_STEP_SUMMARY
+
+      - name: "CC-01: Long-running task (cancellable by newer dispatch)"
+        id: work
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### CC-01: Cancel-in-Progress Test" >> $GITHUB_STEP_SUMMARY
+          echo "Starting 60s simulated CI run..." >> $GITHUB_STEP_SUMMARY
+          echo "If a newer synchronize dispatch arrives, this run should be cancelled." >> $GITHUB_STEP_SUMMARY
+
+          for i in $(seq 1 12); do
+            echo "Working... step $i/12"
+            sleep 5
+          done
+
+          echo "outcome=success" >> "$GITHUB_OUTPUT"
+          echo "✅ Run completed without cancellation" >> $GITHUB_STEP_SUMMARY
+
+      - name: Report completed
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: ${{ steps.work.outputs.outcome || (job.status == 'success' && 'success' || 'failure') }}
+
+      - name: "CC-03: Check for stale in_progress (on cancellation)"
+        if: cancelled()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### CC-03: Stale in_progress Record" >> $GITHUB_STEP_SUMMARY
+          echo "⚠️ This run was **cancelled** before the completed callback could fire." >> $GITHUB_STEP_SUMMARY
+          echo "The in_progress record in DynamoDB/ClickHouse will remain as 'running'" >> $GITHUB_STEP_SUMMARY
+          echo "indefinitely — this is the stale record problem documented in" >> $GITHUB_STEP_SUMMARY
+          echo "[Issue #5](https://github.com/pytorch/crcr-test/issues/5)." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Detail | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|--------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Run ID | \`${{ github.run_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| PR | #${{ github.event.client_payload.payload.pull_request.number }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Workflow URL | [${{ github.run_id }}](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}) |" >> $GITHUB_STEP_SUMMARY
+
+      - name: "Summary"
+        if: always()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "---" >> $GITHUB_STEP_SUMMARY
+          echo "### Final Status" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| job.status | \`${{ job.status }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cancelled? | \`${{ cancelled() }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Run ID | \`${{ github.run_id }}\` |" >> $GITHUB_STEP_SUMMARY

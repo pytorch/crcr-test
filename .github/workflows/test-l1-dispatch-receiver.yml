@@ -1,0 +1,181 @@
+name: "Test: L1 Dispatch Receiver"
+
+on:
+  repository_dispatch:
+    types:
+      - pull_request
+      - push
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number (manual testing)"
+        required: false
+        default: "0"
+
+run-name: >-
+  [Test L1] ${{
+    github.event.client_payload.event_type == 'pull_request' &&
+    format('PR #{0} ({1})',
+      github.event.client_payload.payload.pull_request.number,
+      github.event.client_payload.payload.action) ||
+    github.event.client_payload.event_type == 'push' &&
+    format('Push {0}', github.event.client_payload.payload.ref) ||
+    'Manual trigger'
+  }}
+
+concurrency:
+  group: >-
+    test-l1-${{ github.event.client_payload.payload.repository.full_name || 'manual' }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+
+jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "L1-03: PR closed — cancel-workflow job runs"
+        run: |
+          echo "## L1-03: PR Closed Dispatch" >> $GITHUB_STEP_SUMMARY
+          echo "✅ cancel-workflow job triggered correctly for PR closed action" >> $GITHUB_STEP_SUMMARY
+          echo "PR #${{ github.event.client_payload.payload.pull_request.number }} closed" >> $GITHUB_STEP_SUMMARY
+
+  inspect:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "L1-01/L1-04: Validate event_type and delivery_id"
+        id: validate_envelope
+        run: |
+          EVENT_TYPE="${{ github.event.client_payload.event_type }}"
+          DELIVERY_ID="${{ github.event.client_payload.delivery_id }}"
+
+          echo "## L1 Dispatch Validation" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PASS=true
+
+          # L1-01/L1-04: event_type must be present and valid
+          if [ "$EVENT_TYPE" = "pull_request" ] || [ "$EVENT_TYPE" = "push" ]; then
+            echo "✅ **L1-01/L1-04**: event_type = \`$EVENT_TYPE\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **L1-01/L1-04**: event_type missing or invalid: \`$EVENT_TYPE\`" >> $GITHUB_STEP_SUMMARY
+            PASS=false
+          fi
+
+          # delivery_id must be non-empty
+          if [ -n "$DELIVERY_ID" ]; then
+            echo "✅ **L1-01**: delivery_id = \`$DELIVERY_ID\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ **L1-01**: delivery_id is empty" >> $GITHUB_STEP_SUMMARY
+            PASS=false
+          fi
+
+          echo "event_type=$EVENT_TYPE" >> "$GITHUB_OUTPUT"
+          echo "delivery_id=$DELIVERY_ID" >> "$GITHUB_OUTPUT"
+
+          if [ "$PASS" = "false" ]; then
+            echo "::error::Envelope validation failed"
+            exit 1
+          fi
+
+      - name: "L1-05: Validate upstream repo"
+        run: |
+          UPSTREAM="${{ github.event.client_payload.payload.repository.full_name }}"
+          if [ "$UPSTREAM" = "pytorch/pytorch" ]; then
+            echo "✅ **L1-05**: upstream repo = \`$UPSTREAM\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ **L1-05**: upstream repo = \`$UPSTREAM\` (expected pytorch/pytorch)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: "L1-01: Validate pull_request fields"
+        if: ${{ steps.validate_envelope.outputs.event_type == 'pull_request' }}
+        run: |
+          PR_NUM="${{ github.event.client_payload.payload.pull_request.number }}"
+          PR_ACTION="${{ github.event.client_payload.payload.action }}"
+          HEAD_SHA="${{ github.event.client_payload.payload.pull_request.head.sha }}"
+          HEAD_REPO="${{ github.event.client_payload.payload.pull_request.head.repo.full_name }}"
+          PR_TITLE="${{ github.event.client_payload.payload.pull_request.title }}"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Pull Request Fields" >> $GITHUB_STEP_SUMMARY
+
+          PASS=true
+          for FIELD_NAME in PR_NUM PR_ACTION HEAD_SHA; do
+            eval VAL=\$$FIELD_NAME
+            if [ -n "$VAL" ]; then
+              echo "✅ $FIELD_NAME = \`$VAL\`" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ $FIELD_NAME is empty" >> $GITHUB_STEP_SUMMARY
+              PASS=false
+            fi
+          done
+
+          echo "✅ HEAD_REPO = \`$HEAD_REPO\`" >> $GITHUB_STEP_SUMMARY
+          echo "✅ PR_TITLE = \`$PR_TITLE\`" >> $GITHUB_STEP_SUMMARY
+
+          # L1-02: For synchronize, head SHA must be present
+          if [ "$PR_ACTION" = "synchronize" ]; then
+            echo "" >> $GITHUB_STEP_SUMMARY
+            echo "### L1-02: Synchronize Validation" >> $GITHUB_STEP_SUMMARY
+            if [ -n "$HEAD_SHA" ]; then
+              echo "✅ Updated head SHA present for synchronize: \`$HEAD_SHA\`" >> $GITHUB_STEP_SUMMARY
+            else
+              echo "❌ Head SHA missing on synchronize event" >> $GITHUB_STEP_SUMMARY
+              PASS=false
+            fi
+          fi
+
+          if [ "$PASS" = "false" ]; then
+            echo "::error::PR field validation failed"
+            exit 1
+          fi
+
+      - name: "L1-04: Validate push fields"
+        if: ${{ steps.validate_envelope.outputs.event_type == 'push' }}
+        run: |
+          REF="${{ github.event.client_payload.payload.ref }}"
+          AFTER="${{ github.event.client_payload.payload.after }}"
+          BASE_REF="${{ github.event.client_payload.payload.base_ref }}"
+          DELETED="${{ github.event.client_payload.payload.deleted }}"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Push Fields" >> $GITHUB_STEP_SUMMARY
+
+          PASS=true
+          if [ -n "$REF" ]; then
+            echo "✅ ref = \`$REF\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ ref is empty" >> $GITHUB_STEP_SUMMARY
+            PASS=false
+          fi
+
+          if [ -n "$AFTER" ]; then
+            echo "✅ after (SHA) = \`$AFTER\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ after (SHA) is empty" >> $GITHUB_STEP_SUMMARY
+            PASS=false
+          fi
+
+          echo "ℹ️ base_ref = \`$BASE_REF\`" >> $GITHUB_STEP_SUMMARY
+          echo "ℹ️ deleted = \`$DELETED\`" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$PASS" = "false" ]; then
+            echo "::error::Push field validation failed"
+            exit 1
+          fi
+
+      - name: "L1-06: Full payload dump"
+        if: always()
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Full Event Payload" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          cat <<'EOF' >> $GITHUB_STEP_SUMMARY
+          ```json
+          ${{ toJson(github.event.client_payload) }}
+          ```
+          EOF

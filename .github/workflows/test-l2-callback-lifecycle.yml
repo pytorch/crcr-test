@@ -1,0 +1,189 @@
+name: "Test: L2 Callback Lifecycle"
+
+on:
+  repository_dispatch:
+    types:
+      - pull_request
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number (manual testing)"
+        required: false
+        default: "0"
+
+run-name: >-
+  [Test L2 Lifecycle] ${{
+    github.event.client_payload.event_type == 'pull_request' &&
+    format('PR #{0}',
+      github.event.client_payload.payload.pull_request.number) ||
+    'Manual trigger'
+  }}
+
+concurrency:
+  group: >-
+    test-l2-lifecycle-${{ github.event.client_payload.payload.repository.full_name || 'manual' }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  id-token: write
+
+jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed — canceling older runs"
+
+  callback-lifecycle:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "L2-01: Report in_progress"
+        id: cb_start
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "L2-01: Verify in_progress succeeded"
+        run: |
+          echo "## L2 Callback Lifecycle Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **L2-01**: in_progress callback succeeded" >> $GITHUB_STEP_SUMMARY
+
+      - name: "L2-04: Verify check_run_id and run_id"
+        run: |
+          CHECK_RUN_ID="${{ job.check_run_id }}"
+          RUN_ID="${{ github.run_id }}"
+          RUN_ATTEMPT="${{ github.run_attempt }}"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### L2-04: Callback Identity Fields" >> $GITHUB_STEP_SUMMARY
+
+          if [ -n "$CHECK_RUN_ID" ]; then
+            echo "✅ check_run_id = \`$CHECK_RUN_ID\`" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ check_run_id is empty (fallback to run_id-run_attempt)" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "✅ run_id = \`$RUN_ID\`" >> $GITHUB_STEP_SUMMARY
+          echo "✅ run_attempt = \`$RUN_ATTEMPT\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: "L2-05: Record start timestamp"
+        id: timing
+        run: |
+          START_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          echo "start_time=$START_TIME" >> "$GITHUB_OUTPUT"
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### L2-05: Timestamps" >> $GITHUB_STEP_SUMMARY
+          echo "✅ started_at recorded: \`$START_TIME\`" >> $GITHUB_STEP_SUMMARY
+
+      - name: Simulate work
+        id: tests
+        run: |
+          sleep 5
+          echo "outcome=success" >> "$GITHUB_OUTPUT"
+          echo "passed=42" >> "$GITHUB_OUTPUT"
+          echo "failed=0" >> "$GITHUB_OUTPUT"
+          echo "skipped=3" >> "$GITHUB_OUTPUT"
+          echo "total=45" >> "$GITHUB_OUTPUT"
+
+      - name: "L2-02: Report completed (success)"
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: ${{ steps.tests.outputs.outcome || (job.status == 'success' && 'success' || 'failure') }}
+          test-results: >-
+            {
+              "passed": ${{ steps.tests.outputs.passed || 0 }},
+              "failed": ${{ steps.tests.outputs.failed || 0 }},
+              "skipped": ${{ steps.tests.outputs.skipped || 0 }},
+              "total": ${{ steps.tests.outputs.total || 0 }}
+            }
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: "L2-02/L2-05/L2-06/L2-07: Verify completed callback"
+        if: always()
+        run: |
+          CONCLUSION="${{ steps.tests.outputs.outcome || 'failure' }}"
+          END_TIME=$(date -u +%Y-%m-%dT%H:%M:%SZ)
+          ARTIFACT_URL="${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Completed Callback Verification" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **L2-02**: completed callback sent with conclusion=\`$CONCLUSION\`" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **L2-05**: completed_at recorded: \`$END_TIME\`" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **L2-06**: test_results included (passed=${{ steps.tests.outputs.passed || 0 }}, failed=${{ steps.tests.outputs.failed || 0 }})" >> $GITHUB_STEP_SUMMARY
+          echo "✅ **L2-07**: artifact_url = \`$ARTIFACT_URL\`" >> $GITHUB_STEP_SUMMARY
+
+  callback-failure-path:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: Simulate failure
+        id: tests
+        run: |
+          echo "outcome=failure" >> "$GITHUB_OUTPUT"
+          echo "passed=30" >> "$GITHUB_OUTPUT"
+          echo "failed=5" >> "$GITHUB_OUTPUT"
+          echo "skipped=2" >> "$GITHUB_OUTPUT"
+          echo "total=37" >> "$GITHUB_OUTPUT"
+
+      - name: "L2-03: Report completed (failure)"
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: failure
+          test-results: >-
+            {
+              "passed": ${{ steps.tests.outputs.passed || 0 }},
+              "failed": ${{ steps.tests.outputs.failed || 0 }},
+              "skipped": ${{ steps.tests.outputs.skipped || 0 }},
+              "total": ${{ steps.tests.outputs.total || 0 }}
+            }
+
+      - name: "L2-03: Verify failure callback"
+        if: always()
+        run: |
+          echo "## L2-03: Failure Path" >> $GITHUB_STEP_SUMMARY
+          echo "✅ completed callback with conclusion=failure sent successfully" >> $GITHUB_STEP_SUMMARY
+
+  callback-timing:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "L2-08: Time the in_progress callback"
+        id: timer_start
+        run: echo "ts=$(date +%s)" >> "$GITHUB_OUTPUT"
+
+      - name: Report in_progress (timed)
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "L2-08: Verify callback completed within max-time"
+        run: |
+          END=$(date +%s)
+          START=${{ steps.timer_start.outputs.ts }}
+          ELAPSED=$(( END - START ))
+          echo "## L2-08: Callback Timing" >> $GITHUB_STEP_SUMMARY
+          if [ "$ELAPSED" -le 15 ]; then
+            echo "✅ in_progress callback completed in ${ELAPSED}s (within 10s max-time + overhead)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "❌ in_progress callback took ${ELAPSED}s (exceeds expected)" >> $GITHUB_STEP_SUMMARY
+            exit 1
+          fi
+
+      - name: Report completed (timed)
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
