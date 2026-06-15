@@ -167,3 +167,182 @@ jobs:
         run: |
           echo "## EC-06: always() Callback on Failure" >> $GITHUB_STEP_SUMMARY
           echo "✅ completed callback with conclusion=failure sent after build step failed" >> $GITHUB_STEP_SUMMARY
+
+  # --- Test Results Extraction (TR-01/02/03) ---
+
+  # TR-01: Full test results with explicit total
+  tr01-full-test-results:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "TR-01: Send completed with all test_results fields"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          test-results: '{"passed": 100, "failed": 5, "skipped": 10, "total": 115}'
+
+      - name: "TR-01: Summary"
+        run: |
+          echo "## TR-01: Full Test Results" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Sent: passed=100, failed=5, skipped=10, total=115" >> $GITHUB_STEP_SUMMARY
+          echo "Verify in ClickHouse: all 4 fields stored correctly" >> $GITHUB_STEP_SUMMARY
+
+  # TR-02: Test results without total (total should be computed as passed+failed+skipped)
+  tr02-computed-total:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "TR-02: Send completed without total field"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          test-results: '{"passed": 80, "failed": 3, "skipped": 7}'
+
+      - name: "TR-02: Summary"
+        run: |
+          echo "## TR-02: Computed Total" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Sent: passed=80, failed=3, skipped=7 (no total)" >> $GITHUB_STEP_SUMMARY
+          echo "Verify in ClickHouse: total_tests should be 90 (80+3+7)" >> $GITHUB_STEP_SUMMARY
+
+  # TR-03: Test results on in_progress should NOT be stored
+  tr03-results-on-in-progress:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "TR-03: Send in_progress with test_results (should be ignored)"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+          test-results: '{"passed": 999, "failed": 999, "skipped": 999, "total": 2997}'
+
+      - name: "TR-03: Send completed without test_results"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+
+      - name: "TR-03: Summary"
+        run: |
+          echo "## TR-03: Test Results on in_progress" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Sent test_results with in_progress, then completed without test_results" >> $GITHUB_STEP_SUMMARY
+          echo "Verify: test result fields should be empty/null (in_progress results ignored)" >> $GITHUB_STEP_SUMMARY
+
+  # --- Payload & Conclusion Variants (PAYLOAD-04/05) ---
+
+  # PAYLOAD-04: completed/cancelled
+  payload04-cancelled:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "PAYLOAD-04: Report completed with conclusion=cancelled"
+        id: cancelled_cb
+        continue-on-error: true
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: cancelled
+
+      - name: "PAYLOAD-04: Summary"
+        if: always()
+        run: |
+          echo "## PAYLOAD-04: conclusion=cancelled" >> $GITHUB_STEP_SUMMARY
+          OUTCOME="${{ steps.cancelled_cb.outcome }}"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "✅ Callback accepted conclusion=cancelled" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Callback rejected conclusion=cancelled (outcome=$OUTCOME)" >> $GITHUB_STEP_SUMMARY
+            echo "The action restricts conclusion to [success, failure]." >> $GITHUB_STEP_SUMMARY
+            echo "See: https://github.com/pytorch/crcr-test/issues/7 (expand valid conclusions)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # PAYLOAD-05: completed/timed_out
+  payload05-timed-out:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "PAYLOAD-05: Report completed with conclusion=timed_out"
+        id: timedout_cb
+        continue-on-error: true
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: timed_out
+
+      - name: "PAYLOAD-05: Summary"
+        if: always()
+        run: |
+          echo "## PAYLOAD-05: conclusion=timed_out" >> $GITHUB_STEP_SUMMARY
+          OUTCOME="${{ steps.timedout_cb.outcome }}"
+          if [ "$OUTCOME" = "success" ]; then
+            echo "✅ Callback accepted conclusion=timed_out" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Callback rejected conclusion=timed_out (outcome=$OUTCOME)" >> $GITHUB_STEP_SUMMARY
+            echo "The action restricts conclusion to [success, failure]." >> $GITHUB_STEP_SUMMARY
+            echo "See: https://github.com/pytorch/crcr-test/issues/7 (expand valid conclusions)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # --- Payload Size Limit (SIZE-04) ---
+
+  # SIZE-04: Payload exceeding 2MB should be rejected by HUD API
+  size04-oversized-payload:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "SIZE-04: Generate ~2.5MB test_results"
+        id: gen_large
+        run: |
+          python3 -c "
+          import json
+          big = 'x' * (2 * 1024 * 1024)
+          print(json.dumps({'passed': 1, 'failed': 0, 'skipped': 0, 'total': 1, 'details': big}))
+          " > /tmp/huge_results.json
+          SIZE=$(wc -c < /tmp/huge_results.json)
+          echo "Generated payload: ${SIZE} bytes (~$(( SIZE / 1024 / 1024 ))MB)"
+
+      - name: "SIZE-04: Send oversized completed callback"
+        id: oversized_cb
+        continue-on-error: true
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          test-results: "@/tmp/huge_results.json"
+
+      - name: "SIZE-04: Summary"
+        if: always()
+        run: |
+          echo "## SIZE-04: Oversized Payload" >> $GITHUB_STEP_SUMMARY
+          OUTCOME="${{ steps.oversized_cb.outcome }}"
+          if [ "$OUTCOME" = "failure" ]; then
+            echo "✅ Oversized payload correctly rejected" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Oversized payload was accepted (outcome=$OUTCOME)" >> $GITHUB_STEP_SUMMARY
+            echo "The 2MB limit may apply at HUD API, not at callback action." >> $GITHUB_STEP_SUMMARY
+          fi

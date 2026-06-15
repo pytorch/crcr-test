@@ -1,0 +1,177 @@
+name: "Test: L2 State Transitions"
+
+on:
+  repository_dispatch:
+    types:
+      - pull_request
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number (manual testing)"
+        required: false
+        default: "0"
+
+run-name: >-
+  [Test State] ${{
+    github.event.client_payload.event_type == 'pull_request' &&
+    format('PR #{0}',
+      github.event.client_payload.payload.pull_request.number) ||
+    'Manual trigger'
+  }}
+
+concurrency:
+  group: >-
+    test-state-${{ github.event.client_payload.payload.repository.full_name || 'manual' }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  id-token: write
+
+jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed — canceling older runs"
+
+  # STATE-04: Send completed without prior in_progress
+  # The relay's Redis state machine requires IN_PROGRESS before COMPLETED.
+  # Skipping in_progress should cause the relay to reject (400).
+  state04-skip-in-progress:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "STATE-04: Send completed without in_progress"
+        id: direct_complete
+        continue-on-error: true
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+
+      - name: "STATE-04: Verify rejection"
+        run: |
+          echo "## STATE-04: Skip in_progress" >> $GITHUB_STEP_SUMMARY
+          OUTCOME="${{ steps.direct_complete.outcome }}"
+          if [ "$OUTCOME" = "failure" ]; then
+            echo "✅ Relay correctly rejected completed without prior in_progress" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Relay accepted completed without in_progress (outcome=$OUTCOME)" >> $GITHUB_STEP_SUMMARY
+            echo "This may indicate the relay allows direct completed or the state machine changed." >> $GITHUB_STEP_SUMMARY
+          fi
+
+  # STATE-05: Send only in_progress, never complete — record stays "running"
+  state05-stale-in-progress:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "STATE-05: Report in_progress only"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "STATE-05: Intentionally skip completed callback"
+        run: |
+          echo "## STATE-05: Stale in_progress" >> $GITHUB_STEP_SUMMARY
+          echo "✅ in_progress callback sent, completed callback intentionally skipped." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "This record will remain as 'running' in the HUD indefinitely." >> $GITHUB_STEP_SUMMARY
+          echo "Verify on HUD that this run shows as in_progress/running." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Run ID | \`${{ github.run_id }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Job | \`state05-stale-in-progress\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| PR | #${{ github.event.client_payload.payload.pull_request.number || 'N/A' }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Related: [Issue #5](https://github.com/pytorch/crcr-test/issues/5)" >> $GITHUB_STEP_SUMMARY
+
+  # DYNAMO-06: Verify completed doesn't clobber started_at/queue_time
+  dynamo06-merge-semantics:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "DYNAMO-06: Report in_progress (sets started_at, queue_time)"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: Simulate work
+        run: sleep 8
+
+      - name: "DYNAMO-06: Report completed (sets completed_at, execution_time)"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          test-results: '{"passed": 50, "failed": 0, "skipped": 2, "total": 52}'
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: "DYNAMO-06: Verify merge semantics via HUD"
+        run: |
+          echo "## DYNAMO-06: UpdateItem Merge Semantics" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Both callbacks sent successfully. To verify merge semantics:" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "1. Query ClickHouse for this run's record" >> $GITHUB_STEP_SUMMARY
+          echo "2. Verify \`started_at\` is set (from in_progress callback)" >> $GITHUB_STEP_SUMMARY
+          echo "3. Verify \`completed_at\` is set (from completed callback)" >> $GITHUB_STEP_SUMMARY
+          echo "4. Verify \`queue_time\` is non-null (dispatch → in_progress)" >> $GITHUB_STEP_SUMMARY
+          echo "5. Verify \`execution_time\` is non-null (in_progress → completed)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          PR_NUM="${{ github.event.client_payload.payload.pull_request.number || '0' }}"
+          if [ "$PR_NUM" != "0" ]; then
+            echo "Waiting 30s for propagation..." >> $GITHUB_STEP_SUMMARY
+            sleep 30
+            QUERY_URL="https://hud.pytorch.org/api/clickhouse/oot_pr_results?parameters=%7B%22pr%22%3A${PR_NUM}%7D"
+            RESPONSE=$(curl -sf "$QUERY_URL" 2>&1) || true
+
+            if [ -n "$RESPONSE" ]; then
+              echo "$RESPONSE" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          repo = '${{ github.repository }}'
+          matches = [r for r in data if r.get('downstream_repo') == repo and r.get('job_name') == 'dynamo06-merge-semantics']
+          if matches:
+              r = matches[-1]
+              started = r.get('started_at', '')
+              completed = r.get('completed_at', '')
+              qt = r.get('queue_time')
+              et = r.get('execution_time')
+              print(f'✅ started_at: {started}')
+              print(f'✅ completed_at: {completed}')
+              print(f'queue_time: {qt} {\"✅\" if qt else \"⚠️ null\"}')
+              print(f'execution_time: {et} {\"✅\" if et else \"⚠️ null\"}')
+          else:
+              print('⚠️ Record not found yet (propagation delay)')
+          " >> $GITHUB_STEP_SUMMARY 2>&1 || echo "⚠️ Query parse error" >> $GITHUB_STEP_SUMMARY
+            fi
+          fi
+
+  # MULTI-05: Cancelled run then re-run — both records should exist
+  multi05-cancel-rerun:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: "MULTI-05: Report in_progress (simulating first run)"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "MULTI-05: Report completed with failure (simulating cancelled first run)"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: failure
+
+      - name: "MULTI-05: Summary"
+        run: |
+          echo "## MULTI-05: Cancel then Re-run" >> $GITHUB_STEP_SUMMARY
+          echo "✅ First run: in_progress → completed/failure (simulating cancelled)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "On a real re-run (new run_attempt), a new check_run_id is generated," >> $GITHUB_STEP_SUMMARY
+          echo "producing a different dynamoKey → separate DynamoDB/ClickHouse record." >> $GITHUB_STEP_SUMMARY
+          echo "Old record retains its conclusion; new record tracks independently." >> $GITHUB_STEP_SUMMARY

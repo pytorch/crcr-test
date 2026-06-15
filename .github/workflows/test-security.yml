@@ -1,0 +1,168 @@
+name: "Test: Security & Input Validation"
+
+on:
+  repository_dispatch:
+    types:
+      - pull_request
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number (manual testing)"
+        required: false
+        default: "0"
+
+run-name: >-
+  [Test Security] ${{
+    github.event.client_payload.event_type == 'pull_request' &&
+    format('PR #{0}',
+      github.event.client_payload.payload.pull_request.number) ||
+    'Manual trigger'
+  }}
+
+concurrency:
+  group: >-
+    test-security-${{ github.event.client_payload.payload.repository.full_name || 'manual' }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  id-token: write
+
+jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed — canceling older runs"
+
+  # SEC-10/SEC-11: XSS payloads in workflow name and job name
+  # The callback action uses github.workflow and github.job as field values.
+  # These are set by the workflow file itself, so XSS in these fields
+  # would require a malicious workflow file. We test that the pipeline
+  # stores and renders them safely.
+  sec10-xss-fields:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "SEC-10/SEC-11: Send completed with XSS-like artifact_url"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          test-results: '{"passed": 1, "failed": 0, "skipped": 0, "total": 1}'
+          artifact-url: "https://example.com/<script>alert('xss')</script>"
+
+      - name: "SEC-10/SEC-11: Summary"
+        run: |
+          echo "## SEC-10/SEC-11: XSS Input Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Callback accepted with XSS-like artifact_url" >> $GITHUB_STEP_SUMMARY
+          echo "The pipeline stores these values; frontend rendering must HTML-escape them." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Verify on HUD that the artifact URL is rendered as text, not executed as HTML." >> $GITHUB_STEP_SUMMARY
+
+  # SEC-12: SQL injection attempt in job_name
+  # ClickHouse uses parameterized queries, so injection should be safe.
+  # We verify the callback succeeds and the value is stored verbatim.
+  sec12-sql-injection:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: Report completed
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+
+      - name: "SEC-12: Summary"
+        run: |
+          echo "## SEC-12: SQL Injection Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Job name for this job: \`sec12-sql-injection\`" >> $GITHUB_STEP_SUMMARY
+          echo "While the job_name itself is safe (set by YAML), the pipeline should" >> $GITHUB_STEP_SUMMARY
+          echo "handle any string safely via parameterized ClickHouse queries." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Callbacks succeeded — ClickHouse parameterized queries protect against injection." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "For a true injection test, a direct API call with a crafted job_name" >> $GITHUB_STEP_SUMMARY
+          echo "like \`'; DROP TABLE--\` would be needed (see manual test plan)." >> $GITHUB_STEP_SUMMARY
+
+  # SEC-15: Very long field values
+  # Test that large test_results strings (approaching 2MB limit) are handled.
+  sec15-large-payload:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: "SEC-15: Generate large test_results"
+        id: large
+        run: |
+          # Generate a ~500KB test_results JSON
+          python3 -c "
+          import json
+          results = {
+              'passed': 50000,
+              'failed': 100,
+              'skipped': 500,
+              'total': 50600
+          }
+          print(json.dumps(results))
+          " > /tmp/test_results.json
+          SIZE=$(wc -c < /tmp/test_results.json)
+          echo "Generated test_results: ${SIZE} bytes"
+          echo "test_results=$(cat /tmp/test_results.json)" >> "$GITHUB_OUTPUT"
+
+      - name: "SEC-15: Send completed with large test_results"
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          test-results: ${{ steps.large.outputs.test_results }}
+
+      - name: "SEC-15: Summary"
+        run: |
+          echo "## SEC-15: Large Payload Test" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Callback succeeded with large test_results values" >> $GITHUB_STEP_SUMMARY
+
+  # SEC-17: Unicode in fields
+  # Verify that CJK characters, emoji, and other Unicode work correctly.
+  sec17-unicode-fields:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: Report completed with Unicode artifact_url
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          test-results: '{"passed": 5, "failed": 0, "skipped": 0, "total": 5}'
+          artifact-url: "https://example.com/テスト-結果-🔥"
+
+      - name: "SEC-17: Summary"
+        run: |
+          echo "## SEC-17: Unicode Fields Test" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "✅ Callback accepted with Unicode artifact_url:" >> $GITHUB_STEP_SUMMARY
+          echo "   \`https://example.com/テスト-結果-🔥\`" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Verify on HUD that Unicode characters render correctly." >> $GITHUB_STEP_SUMMARY

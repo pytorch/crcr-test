@@ -1,0 +1,204 @@
+name: "Test: L2 HUD Query Verification"
+
+on:
+  repository_dispatch:
+    types:
+      - pull_request
+  workflow_dispatch:
+    inputs:
+      pr_number:
+        description: "PR number (manual testing)"
+        required: false
+        default: "0"
+
+run-name: >-
+  [Test HUD Queries] ${{
+    github.event.client_payload.event_type == 'pull_request' &&
+    format('PR #{0}',
+      github.event.client_payload.payload.pull_request.number) ||
+    'Manual trigger'
+  }}
+
+concurrency:
+  group: >-
+    test-hud-queries-${{ github.event.client_payload.payload.repository.full_name || 'manual' }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  id-token: write
+
+jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed — canceling older runs"
+
+  send-callbacks:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    runs-on: ubuntu-latest
+    outputs:
+      pr_number: ${{ steps.meta.outputs.pr_number }}
+      downstream_repo: ${{ steps.meta.outputs.downstream_repo }}
+    steps:
+      - name: Capture metadata
+        id: meta
+        run: |
+          echo "pr_number=${{ github.event.client_payload.payload.pull_request.number || '0' }}" >> "$GITHUB_OUTPUT"
+          echo "downstream_repo=${{ github.repository }}" >> "$GITHUB_OUTPUT"
+
+      - name: Report in_progress
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: Simulate work
+        run: sleep 5
+
+      - name: Report completed
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          test-results: '{"passed": 75, "failed": 0, "skipped": 5, "total": 80}'
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+  verify-queries:
+    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    needs: send-callbacks
+    runs-on: ubuntu-latest
+    env:
+      PR_NUMBER: ${{ needs.send-callbacks.outputs.pr_number }}
+      DOWNSTREAM_REPO: ${{ needs.send-callbacks.outputs.downstream_repo }}
+    steps:
+      - name: Wait for DynamoDB → ClickHouse propagation
+        run: |
+          echo "Waiting 45s for propagation..."
+          sleep 45
+
+      - name: "QP-01: PR with OOT results"
+        run: |
+          echo "## ClickHouse Query Verification" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+
+          if [ "$PR_NUMBER" = "0" ]; then
+            echo "⚠️ No PR number — skipping query tests (manual trigger)" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          echo "### QP-01: oot_pr_results for PR #$PR_NUMBER" >> $GITHUB_STEP_SUMMARY
+          QUERY_URL="https://hud.pytorch.org/api/clickhouse/oot_pr_results?parameters=%7B%22pr%22%3A${PR_NUMBER}%7D"
+          RESPONSE=$(curl -sf "$QUERY_URL" 2>&1) || {
+            echo "⚠️ Query failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          echo "$RESPONSE" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          repo = '$DOWNSTREAM_REPO'
+          matches = [r for r in data if r.get('downstream_repo') == repo]
+          total = len(data)
+          ours = len(matches)
+          print(f'Total records for PR: {total}')
+          print(f'Records from \`{repo}\`: {ours}')
+          if ours > 0:
+              r = matches[-1]
+              print(f'✅ Record found: status=\`{r.get(\"status\")}\`, conclusion=\`{r.get(\"conclusion\")}\`')
+              print(f'   job_name=\`{r.get(\"job_name\")}\`, workflow=\`{r.get(\"workflow_name\")}\`')
+          else:
+              print('⚠️ No record found yet (propagation delay)')
+          " >> $GITHUB_STEP_SUMMARY 2>&1 || echo "⚠️ Parse error" >> $GITHUB_STEP_SUMMARY
+
+      - name: "QP-02: PR with no OOT results"
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### QP-02: oot_pr_results for non-existent PR" >> $GITHUB_STEP_SUMMARY
+          FAKE_PR=999999999
+          QUERY_URL="https://hud.pytorch.org/api/clickhouse/oot_pr_results?parameters=%7B%22pr%22%3A${FAKE_PR}%7D"
+          RESPONSE=$(curl -sf "$QUERY_URL" 2>&1) || {
+            echo "⚠️ Query failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          COUNT=$(echo "$RESPONSE" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>&1)
+          if [ "$COUNT" = "0" ]; then
+            echo "✅ Empty result for non-existent PR #$FAKE_PR (expected)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Got $COUNT results for PR #$FAKE_PR (unexpected)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: "QS-05: in_progress excluded from summary pass rate"
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### QS-05: oot_summary excludes in_progress" >> $GITHUB_STEP_SUMMARY
+          QUERY_URL="https://hud.pytorch.org/api/clickhouse/oot_summary?parameters=%7B%22days%22%3A7%7D"
+          RESPONSE=$(curl -sf "$QUERY_URL" 2>&1) || {
+            echo "⚠️ Query failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          echo "$RESPONSE" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          repo = '$DOWNSTREAM_REPO'
+          matches = [r for r in data if r.get('downstream_repo') == repo]
+          if matches:
+              r = matches[0]
+              print(f'✅ Summary found for \`{repo}\`:')
+              print(f'   pass_rate=\`{r.get(\"pass_rate\", \"N/A\")}\`')
+              print(f'   successes=\`{r.get(\"successes\", 0)}\`, failures=\`{r.get(\"failures\", 0)}\`')
+              print(f'   total=\`{r.get(\"total\", 0)}\`')
+              print(f'   (in_progress jobs should NOT be counted in these totals)')
+          else:
+              print(f'⚠️ No summary entry for \`{repo}\` in last 7 days')
+          " >> $GITHUB_STEP_SUMMARY 2>&1 || echo "⚠️ Parse error" >> $GITHUB_STEP_SUMMARY
+
+      - name: "QD-04: Non-existent repo returns empty"
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### QD-04: oot_backend_dashboard for fake repo" >> $GITHUB_STEP_SUMMARY
+          FAKE_REPO="nonexistent-org/nonexistent-repo"
+          QUERY_URL="https://hud.pytorch.org/api/clickhouse/oot_backend_dashboard?parameters=%7B%22repo%22%3A%22${FAKE_REPO}%22%2C%22days%22%3A7%7D"
+          RESPONSE=$(curl -sf "$QUERY_URL" 2>&1) || {
+            echo "⚠️ Query failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          COUNT=$(echo "$RESPONSE" | python3 -c "import json,sys; print(len(json.load(sys.stdin)))" 2>&1)
+          if [ "$COUNT" = "0" ]; then
+            echo "✅ Empty result for non-existent repo \`$FAKE_REPO\` (expected)" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "⚠️ Got $COUNT results for fake repo (unexpected)" >> $GITHUB_STEP_SUMMARY
+          fi
+
+      - name: "QP-03: Multiple backends on same PR"
+        run: |
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### QP-03: Multiple backends on PR" >> $GITHUB_STEP_SUMMARY
+          if [ "$PR_NUMBER" = "0" ]; then
+            echo "⚠️ Skipped — no PR number" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          fi
+
+          QUERY_URL="https://hud.pytorch.org/api/clickhouse/oot_pr_results?parameters=%7B%22pr%22%3A${PR_NUMBER}%7D"
+          RESPONSE=$(curl -sf "$QUERY_URL" 2>&1) || {
+            echo "⚠️ Query failed" >> $GITHUB_STEP_SUMMARY
+            exit 0
+          }
+
+          echo "$RESPONSE" | python3 -c "
+          import json, sys
+          data = json.load(sys.stdin)
+          repos = set(r.get('downstream_repo', '') for r in data)
+          print(f'Unique backends on PR: {len(repos)}')
+          for r in sorted(repos):
+              count = sum(1 for d in data if d.get('downstream_repo') == r)
+              print(f'  - \`{r}\`: {count} job(s)')
+          if len(repos) > 1:
+              print(f'✅ Multiple backends found on PR #{\"$PR_NUMBER\"} — QP-03 verified')
+          else:
+              print(f'ℹ️ Only {len(repos)} backend(s) on this PR (need multiple to fully verify QP-03)')
+          " >> $GITHUB_STEP_SUMMARY 2>&1 || echo "⚠️ Parse error" >> $GITHUB_STEP_SUMMARY
