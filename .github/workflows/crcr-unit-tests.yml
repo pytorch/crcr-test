@@ -1,0 +1,26 @@
+name: CRCR Unit Tests
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validators:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Run payload validator unit tests
+        run: python3 -m unittest discover -s tests -p 'test_*.py' -v
+
+      - name: Validate fixture files individually
+        run: |
+          for f in tests/fixtures/*.json; do
+            echo "Validating $f"
+            python3 tests/validate_dispatch_payload.py < "$f"
+          done

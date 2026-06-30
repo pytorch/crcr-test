@@ -1,0 +1,19 @@
+{
+  "event_type": "pull_request",
+  "delivery_id": "test-delivery-pr-closed-001",
+  "payload": {
+    "action": "closed",
+    "repository": {
+      "full_name": "pytorch/pytorch"
+    },
+    "pull_request": {
+      "number": 12345,
+      "head": {
+        "sha": "cccccccccccccccccccccccccccccccccccccccc",
+        "repo": {
+          "full_name": "contributor/pytorch"
+        }
+      }
+    }
+  }
+}

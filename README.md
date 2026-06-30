@@ -145,6 +145,45 @@ Once Steps 1–3 are complete, your workflow will start receiving dispatches. Yo
 2. Looking for runs triggered by `pytorch-fdn-cross-repo-ci-relay[bot]`
 3. Inspecting the step summary for the full event payload
 
+## Critical Tests
+
+This repository runs automated critical tests on every CRCR dispatch. They validate the L1 and L2 integration points end-to-end.
+
+| Workflow | Level | Trigger | What it verifies |
+|----------|-------|---------|------------------|
+| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | `pull_request`, `push` | Dispatch payload shape, `delivery_id`, PyTorch checkout at dispatched SHA |
+| [`oot-l2-ci.yml`](.github/workflows/oot-l2-ci.yml) | L2 | `pull_request` | L1 checks + `in_progress`/`completed` relay callbacks, test-results payload, HUD link |
+| [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Local | push/PR to this repo | Payload validator unit tests against JSON fixtures |
+
+### L1 integration points
+
+- `client_payload.event_type` is `pull_request` or `push`
+- `client_payload.delivery_id` is present (required for L2 state tracking)
+- `client_payload.payload.repository.full_name` is `pytorch/pytorch`
+- PR events: `action` in `opened`/`reopened`/`synchronize`/`closed`, valid `pull_request.head.sha`
+- Push events: `ref` starts with `refs/`, valid `after` SHA
+- PyTorch checkout resolves to the dispatched SHA
+- `closed` action runs only the cancel job (no build)
+
+### L2 integration points
+
+- OIDC token minting (`id-token: write`)
+- `in_progress` callback accepted by relay (state machine: `DISPATCHED → IN_PROGRESS`)
+- Deterministic smoke checks (no random pass/fail)
+- `completed` callback with `conclusion: success` and `test_results` summary
+- `artifact_url` points at the GitHub Actions run page
+- Results visible on [hud.pytorch.org/crcr/pytorch/crcr-test](https://hud.pytorch.org/crcr/pytorch/crcr-test)
+
+### Running validators locally
+
+```bash
+# Validate a fixture or saved client_payload JSON
+python3 tests/validate_dispatch_payload.py < tests/fixtures/pull_request_opened.json
+
+# Run all unit tests
+python3 -m unittest discover -s tests -p 'test_*.py' -v
+```
+
 ## Dispatch Payload Structure
 
 The relay wraps the original GitHub event inside `client_payload`:
