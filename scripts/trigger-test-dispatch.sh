@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
-# Send a test repository_dispatch to your fork to exercise L1/L2 workflows.
-# Requires: gh CLI, workflows merged to the fork default branch (main).
+# Send a test repository_dispatch to exercise L1/L2 workflows.
+# Requires: gh CLI, workflows merged to the target repo default branch (main).
 #
 # Usage:
 #   ./scripts/trigger-test-dispatch.sh              # L1+L2 (pull_request/opened)
 #   ./scripts/trigger-test-dispatch.sh push         # L1 only (push event)
+#
+# Target repo: current gh repo, or pytorch/crcr-test. Override with CRCR_TEST_REPO.
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
-REPO="${CRCR_TEST_REPO:-jewelkm89/crcr-test}"
+REPO="${CRCR_TEST_REPO:-$(gh repo view --json nameWithOwner -q .nameWithOwner 2>/dev/null || echo pytorch/crcr-test)}"
 MODE="${1:-pr}"
 
 echo "Fetching latest pytorch/pytorch main SHA..."
@@ -73,5 +75,5 @@ echo ""
 echo "Done. Check workflow runs at:"
 echo "  https://github.com/${REPO}/actions"
 echo ""
-echo "Note: L2 callbacks require pytorch/crcr-test on the CRCR allowlist."
-echo "On a personal fork, in_progress/completed may fail auth — L1 steps should still pass."
+echo "Note: callbacks require the target repo on the CRCR allowlist and a relay dispatch record."
+echo "Synthetic delivery_id dispatches exercise L1/L2 workflow steps; callbacks may fail locally."
