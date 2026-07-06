@@ -6,7 +6,7 @@ on:
       - pull_request
 
 run-name: >-
-  OOT L2 Critical -
+  L2 Health -
   PR #${{ github.event.client_payload.payload.pull_request.number }}
   (${{ github.event.client_payload.payload.action }})
 
@@ -25,7 +25,29 @@ jobs:
     if: ${{ github.event.client_payload.payload.action == 'closed' }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "PR closed — cancel-workflow job ran as expected"
+      - uses: actions/checkout@v4
+
+      - name: Assert closed action skips L2 build job
+        id: closed
+        run: echo "PR closed — cancel-workflow job ran as expected"
+
+      - name: Write closed-event health report
+        if: always()
+        run: |
+          python3 tests/write_health_report.py \
+            --probe l2-closed \
+            --output health-report.json \
+            --delivery-id "${{ github.event.client_payload.delivery_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --event-type pull_request \
+            --pr-number "${{ github.event.client_payload.payload.pull_request.number }}" \
+            --check "closed_cancel=${{ steps.closed.outcome }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crcr-health-l2-closed-${{ github.run_id }}
+          path: health-report.json
 
   l2-critical:
     if: ${{ github.event.client_payload.payload.action != 'closed' }}
@@ -35,6 +57,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: L2 — validate dispatch payload before callbacks
+        id: validate_payload
         env:
           CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: echo "${CLIENT_PAYLOAD}" | python3 tests/validate_dispatch_payload.py
@@ -46,6 +69,7 @@ jobs:
           status: in_progress
 
       - name: L2 — checkout PyTorch at dispatched SHA
+        id: checkout_pytorch
         uses: actions/checkout@v4
         with:
           repository: pytorch/pytorch
@@ -53,6 +77,7 @@ jobs:
           path: pytorch
 
       - name: L2 — verify checkout matches dispatch SHA
+        id: verify_checkout
         env:
           CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
         run: |
@@ -73,6 +98,7 @@ jobs:
           echo "skipped=0" >> "$GITHUB_OUTPUT"
 
       - name: L2 — report completed to relay
+        id: completed
         if: always()
         uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
         with:
@@ -86,18 +112,45 @@ jobs:
             }
           artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
 
+      - name: Write L2 health report
+        if: always()
+        run: |
+          python3 tests/write_health_report.py \
+            --probe l2-critical \
+            --output health-report.json \
+            --delivery-id "${{ github.event.client_payload.delivery_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --event-type pull_request \
+            --pr-number "${{ github.event.client_payload.payload.pull_request.number }}" \
+            --check "validate_payload=${{ steps.validate_payload.outcome }}" \
+            --check "in_progress_callback=${{ steps.in_progress.outcome }}" \
+            --check "checkout_pytorch=${{ steps.checkout_pytorch.outcome }}" \
+            --check "verify_checkout=${{ steps.verify_checkout.outcome }}" \
+            --check "smoke_checks=${{ steps.smoke.outcome }}" \
+            --check "completed_callback=${{ steps.completed.outcome }}"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crcr-health-l2-${{ github.run_id }}
+          path: health-report.json
+
       - name: Write L2 integration summary
         if: always()
         run: |
-          echo "### L2 Critical Tests" >> $GITHUB_STEP_SUMMARY
+          echo "### L2 Real-Time Dispatch Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "Triggered by live \`repository_dispatch\` from CRCR relay." >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "| Integration point | Status |" >> $GITHUB_STEP_SUMMARY
           echo "|-------------------|--------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Dispatch payload validation | passed |" >> $GITHUB_STEP_SUMMARY
+          echo "| Dispatch payload validation | ${{ steps.validate_payload.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "| in_progress callback | ${{ steps.in_progress.outcome }} |" >> $GITHUB_STEP_SUMMARY
-          echo "| PyTorch checkout | passed |" >> $GITHUB_STEP_SUMMARY
-          echo "| completed callback | see job status |" >> $GITHUB_STEP_SUMMARY
+          echo "| PyTorch checkout | ${{ steps.checkout_pytorch.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA verification | ${{ steps.verify_checkout.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Smoke checks | ${{ steps.smoke.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| completed callback | ${{ steps.completed.outcome }} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "HUD: [crcr-test dashboard](https://hud.pytorch.org/crcr/pytorch/crcr-test)" >> $GITHUB_STEP_SUMMARY
+          echo "Verify HUD row: [crcr-test dashboard](https://hud.pytorch.org/crcr/pytorch/crcr-test) (run_id \`${{ github.run_id }}\`)" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "delivery_id: \`${{ github.event.client_payload.delivery_id }}\`" >> $GITHUB_STEP_SUMMARY

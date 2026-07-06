@@ -136,5 +136,56 @@ class TestPytorchCheckout(unittest.TestCase):
             self.assertIn("checkout SHA mismatch", result.stderr)
 
 
+class TestHealthReport(unittest.TestCase):
+    def test_healthy_report(self) -> None:
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "report.json"
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(Path(__file__).parent / "write_health_report.py"),
+                    "--probe",
+                    "l1-critical",
+                    "--output",
+                    str(out),
+                    "--check",
+                    "validate_payload=success",
+                    "--check",
+                    "verify_checkout=success",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0)
+            report = json.loads(out.read_text())
+            self.assertTrue(report["healthy"])
+            self.assertEqual(report["trigger"], "repository_dispatch")
+
+    def test_unhealthy_report(self) -> None:
+        import subprocess
+
+        with tempfile.TemporaryDirectory() as tmp:
+            out = Path(tmp) / "report.json"
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(Path(__file__).parent / "write_health_report.py"),
+                    "--probe",
+                    "l2-critical",
+                    "--output",
+                    str(out),
+                    "--check",
+                    "in_progress_callback=failure",
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertNotEqual(result.returncode, 0)
+            report = json.loads(out.read_text())
+            self.assertFalse(report["healthy"])
+
+
 if __name__ == "__main__":
     unittest.main()

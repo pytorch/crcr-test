@@ -147,13 +147,24 @@ Once Steps 1–3 are complete, your workflow will start receiving dispatches. Yo
 
 ## Critical Tests
 
-This repository runs automated critical tests on every CRCR dispatch. They validate the L1 and L2 integration points end-to-end.
+This repository is a **downstream CRCR health probe**. It contains no CRCR implementation code — only workflows and validators that run when the relay sends a live `repository_dispatch` event.
+
+**There is no scheduled cron.** All CRCR health checks run in real time, triggered by upstream PyTorch activity (PR open/sync/close or push/tag events). Each run writes a structured `health-report.json` artifact you can use for metrics.
 
 | Workflow | Level | Trigger | What it verifies |
 |----------|-------|---------|------------------|
-| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | `pull_request`, `push` | Dispatch payload shape, `delivery_id`, PyTorch checkout at dispatched SHA |
-| [`oot-l2-ci.yml`](.github/workflows/oot-l2-ci.yml) | L2 | `pull_request` | L1 checks + `in_progress`/`completed` relay callbacks, test-results payload, HUD link |
-| [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Local | push/PR to this repo | Payload validator unit tests against JSON fixtures |
+| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request`, `push` | Dispatch payload shape, `delivery_id`, PyTorch checkout at dispatched SHA |
+| [`oot-l2-ci.yml`](.github/workflows/oot-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` | L1 checks + `in_progress`/`completed` relay callbacks, test-results payload, HUD link |
+| [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Offline | push/PR to this repo only | Validator unit tests against JSON fixtures (guards test code, not live CRCR) |
+
+### When tests run
+
+| Event | What runs |
+|-------|-----------|
+| PyTorch PR opened/reopened/synchronized | L1 + L2 health workflows |
+| PyTorch PR closed | L1/L2 cancel jobs only (build jobs skipped) |
+| PyTorch push / ciflow tag | L1 health workflow only |
+| Merge to crcr-test main | `crcr-unit-tests` only (offline contract tests) |
 
 ### L1 integration points
 
