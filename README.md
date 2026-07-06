@@ -181,9 +181,24 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 - OIDC token minting (`id-token: write`)
 - `in_progress` callback accepted by relay (state machine: `DISPATCHED → IN_PROGRESS`)
 - Deterministic smoke checks (no random pass/fail)
-- `completed` callback with `conclusion: success` and `test_results` summary
+- `completed` callback with `conclusion` and `test_results` derived from health checks
+- Each health check maps to one HUD test count (`passed` / `failed` / `total`)
 - `artifact_url` points at the GitHub Actions run page
 - Results visible on [hud.pytorch.org/crcr/pytorch/crcr-test](https://hud.pytorch.org/crcr/pytorch/crcr-test)
+
+### HUD health metrics
+
+L1 and L2 workflows send health probe results to the callback lambda on the `completed`
+callback. The relay forwards them to HUD as `workflow.test_results`:
+
+| Health check step outcome | HUD field |
+|---------------------------|-----------|
+| `success` | counts toward `passed_tests` |
+| `failure` / `cancelled` | counts toward `failed_tests` |
+| `skipped` | counts toward `skipped_tests` |
+
+`total_tests` is the number of probe checks. `conclusion` is `success` only when every
+check succeeded. Per-check names live in the uploaded `health-report.json` artifact.
 
 ### Running validators locally
 
