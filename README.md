@@ -207,6 +207,33 @@ For `pull_request` events:
 | PR head SHA | `github.event.client_payload.payload.pull_request.head.sha` | Head commit SHA of the PR |
 | PR head repo | `github.event.client_payload.payload.pull_request.head.repo.full_name` | Fork repo (if applicable) |
 
+## Rate Limiting
+
+The CRCR relay Lambda enforces server-side rate limiting to protect backend infrastructure (Redis, ClickHouse) from callback bursts. When multiple downstream repositories send callbacks concurrently — for example, during a large upstream PR push that fans out to many repos — the relay may respond with **HTTP 429 (Too Many Requests)**.
+
+### What Happens on 429
+
+The default callback action (`cross-repo-ci-relay-callback`) uses `curl --fail-with-body`, which treats any non-2xx response as a hard failure. A single transient 429 will fail the callback step and mark the job as errored, even though the rate limit is temporary.
+
+### Recommended: Client-Side Retry with Backoff
+
+As discussed in [#8](https://github.com/pytorch/crcr-test/issues/8), the preferred mitigation is **client-side retry with exponential backoff** rather than raising the server-side threshold. The server-side limiter is a protection that should be preserved — no fixed limit can guarantee a concurrent burst never crosses it.
+
+**Why retry over raising limits** (per [@can-gaa-hou](https://github.com/can-gaa-hou)):
+> 429 is inherently transient, so the right place to handle it is the client. Adding retry with backoff (ideally honoring a `Retry-After` header from the relay) makes the callbacks resilient to bursts without weakening the server-side guard.
+
+### Best Practices for Downstream Repositories
+
+1. **Add jitter to workflow steps** — If your workflow has multiple jobs sending callbacks, stagger them with random delays (`sleep $((RANDOM % 10))`) to avoid synchronized bursts.
+2. **Anticipate 429 responses** — Design your callback steps to tolerate transient failures. A retry wrapper around the `curl` call can prevent unnecessary job failures.
+3. **Honor `Retry-After` headers** — If the relay includes a `Retry-After` header in 429 responses, wait at least that long before retrying.
+4. **Limit concurrent callback jobs** — Use GitHub Actions concurrency groups to avoid overwhelming the relay with parallel callbacks from the same repository.
+
+### Planned Improvements
+
+- Client-side retry with backoff in the `cross-repo-ci-relay-callback` action ([pytorch/test-infra](https://github.com/pytorch/test-infra))
+- `Retry-After` header support in the relay Lambda
+
 ## Related Resources
 
 - [RFC-0050: Cross-Repository CI Relay](https://github.com/pytorch/rfcs/blob/master/RFC-0050-Cross-Repository-CI-Relay-for-PyTorch-Out-of-Tree-Backends.md) — Full CRCR design specification
