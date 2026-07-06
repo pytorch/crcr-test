@@ -153,17 +153,35 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 
 | Workflow | Level | Trigger | What it verifies |
 |----------|-------|---------|------------------|
-| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request`, `push` | Dispatch payload shape, `delivery_id`, PyTorch checkout at dispatched SHA |
-| [`oot-l2-ci.yml`](.github/workflows/oot-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` | L1 checks + `in_progress`/`completed` relay callbacks, test-results payload, HUD link |
+| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request`, `push` | Dispatch payload, checkout SHA, `delivery_id`; HUD callbacks on `opened`/`reopened` only |
+| [`oot-l2-ci.yml`](.github/workflows/oot-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (`opened`/`reopened` only) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
 | [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Offline | push/PR to this repo only | Validator unit tests against JSON fixtures (guards test code, not live CRCR) |
+
+### Event filtering (relay rate limits)
+
+The relay callback Lambda enforces a per-repo sliding-window rate limit (see [crcr-test#8](https://github.com/pytorch/crcr-test/issues/8)). A full L1+L2 probe sends **4 callbacks** (`in_progress` + `completed` x2). PyTorch `synchronize` events are high volume and can exceed the limit during busy periods.
+
+Health probes use **tiered coverage** by event type:
+
+| Event | L1 workflow | L2 workflow | Relay callbacks | HUD rows |
+|-------|-------------|-------------|-----------------|----------|
+| `opened`, `reopened` | Full probe + HUD | Full probe + HUD | **4** | **2** |
+| `synchronize` | Light probe (validate + checkout) | Skipped | **0** | **0** |
+| `closed` | Cancel job only | Cancel job only | **0** | **0** |
+| `push` / ciflow tag | Light probe (validate + checkout) | N/A | **0** | **0** |
+
+**Light probe** (`l1-light`): validates dispatch payload, checks out PyTorch at the dispatched SHA, verifies the checkout, asserts `delivery_id`, uploads `health-report.json` — no relay callbacks.
+
+**Full probe** (`l1-critical` / `l2-critical`): light checks plus `in_progress`/`completed` callbacks and HUD `test_results`. Callback mechanics are the same regardless of PR `action`; limiting callbacks to `opened`/`reopened` keeps coverage on low-volume events while `synchronize` still exercises dispatch delivery every upstream push.
 
 ### When tests run
 
 | Event | What runs |
 |-------|-----------|
-| PyTorch PR opened/reopened/synchronized | L1 + L2 health workflows |
-| PyTorch PR closed | L1/L2 cancel jobs only (build jobs skipped) |
-| PyTorch push / ciflow tag | L1 health workflow only |
+| PyTorch PR `opened` / `reopened` | L1 full + L2 full (HUD callbacks) |
+| PyTorch PR `synchronize` | L1 light only (no callbacks, no L2) |
+| PyTorch PR `closed` | L1/L2 cancel jobs only (build jobs skipped) |
+| PyTorch push / ciflow tag | L1 light only (no callbacks) |
 | Merge to crcr-test main | `crcr-unit-tests` only (offline contract tests) |
 
 ### L1 integration points
@@ -175,9 +193,12 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 - Push events: `ref` starts with `refs/`, valid `after` SHA
 - PyTorch checkout resolves to the dispatched SHA
 - `closed` action runs only the cancel job (no build)
+- **`opened`/`reopened`**: full probe with `in_progress`/`completed` callbacks to HUD
+- **`synchronize`/`push`**: light probe only (payload + checkout; no callbacks)
 
 ### L2 integration points
 
+- Runs only on PR `opened` and `reopened` (skipped on `synchronize` to limit callback volume)
 - OIDC token minting (`id-token: write`)
 - `in_progress` callback accepted by relay (state machine: `DISPATCHED → IN_PROGRESS`)
 - Deterministic smoke checks (no random pass/fail)

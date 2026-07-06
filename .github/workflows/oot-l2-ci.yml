@@ -51,7 +51,9 @@ jobs:
           path: health-report.json
 
   l2-critical:
-    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    if: >-
+      github.event.client_payload.payload.action != 'closed' &&
+      contains(fromJSON('["opened","reopened"]'), github.event.client_payload.payload.action)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout crcr-test
