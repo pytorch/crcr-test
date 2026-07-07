@@ -209,7 +209,7 @@ For `pull_request` events:
 
 ## Rate Limiting
 
-The CRCR relay Lambda enforces server-side rate limiting to protect backend infrastructure (Redis, ClickHouse) from callback bursts. When multiple downstream repositories send callbacks concurrently — for example, during a large upstream PR push that fans out to many repos — the relay may respond with **HTTP 429 (Too Many Requests)**.
+The CRCR relay Lambda enforces server-side rate limiting to protect backend infrastructure (Redis, ClickHouse) from callback bursts. The current limit is **60 requests per minute** across all downstream repositories. When multiple downstream repositories send callbacks concurrently — for example, during a large upstream PR push that fans out to many repos — the relay may respond with **HTTP 429 (Too Many Requests)**.
 
 ### What Happens on 429
 
