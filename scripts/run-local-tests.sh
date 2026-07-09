@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # Run offline CRCR validator tests (no relay required).
+# Live L1/L2 probe workflows: crcr-dispatch-receiver.yml, crcr-l2-ci.yml
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

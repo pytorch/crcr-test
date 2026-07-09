@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
-# Send a test repository_dispatch to exercise L1/L2 workflows.
+# Send a test repository_dispatch to exercise CRCR probe workflows.
 # Requires: gh CLI, workflows merged to the target repo default branch (main).
+#
+# Workflows exercised:
+#   pull_request/opened -> crcr-dispatch-receiver.yml (L1 full) + crcr-l2-ci.yml (L2 full)
+#   push                -> crcr-dispatch-receiver.yml (L1 light) only
 #
 # Usage:
 #   ./scripts/trigger-test-dispatch.sh              # L1+L2 (pull_request/opened)
-#   ./scripts/trigger-test-dispatch.sh push         # L1 only (push event)
+#   ./scripts/trigger-test-dispatch.sh push         # L1 light only (push event)
 #
 # Target repo: current gh repo, or pytorch/crcr-test. Override with CRCR_TEST_REPO.
 set -euo pipefail
@@ -74,6 +78,11 @@ echo "${PAYLOAD}" | gh api --method POST "repos/${REPO}/dispatches" --input -
 echo ""
 echo "Done. Check workflow runs at:"
 echo "  https://github.com/${REPO}/actions"
+if [[ "${MODE}" == "push" ]]; then
+  echo "Expected workflows: crcr-dispatch-receiver.yml (L1 light)"
+else
+  echo "Expected workflows: crcr-dispatch-receiver.yml (L1 full), crcr-l2-ci.yml (L2 full)"
+fi
 echo ""
 echo "Note: callbacks require the target repo on the CRCR allowlist and a relay dispatch record."
 echo "Synthetic delivery_id dispatches exercise L1/L2 workflow steps; callbacks may fail locally."

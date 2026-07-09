@@ -154,7 +154,7 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 | Workflow | Level | Trigger | What it verifies |
 |----------|-------|---------|------------------|
 | [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request`, `push` | Dispatch payload, checkout SHA, `delivery_id`; HUD callbacks on `opened`/`reopened` only |
-| [`oot-l2-ci.yml`](.github/workflows/oot-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (`opened`/`reopened` only) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
+| [`crcr-l2-ci.yml`](.github/workflows/crcr-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (`opened`/`reopened` only) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
 | [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Offline | push/PR to this repo only | Validator unit tests against JSON fixtures (guards test code, not live CRCR) |
 
 ### Event filtering (relay rate limits)
