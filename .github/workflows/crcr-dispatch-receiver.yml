@@ -128,22 +128,29 @@ jobs:
           fi
           echo "delivery_id=${DELIVERY_ID}"
 
+      - name: L1 — export probe step outcomes
+        if: always()
+        run: |
+          {
+            echo "VALIDATE_PAYLOAD=${{ steps.validate_payload.outcome }}"
+            echo "IN_PROGRESS_CALLBACK=${{ steps.in_progress.outcome }}"
+            echo "CHECKOUT_PYTORCH=${{ steps.checkout_pytorch.outcome }}"
+            echo "VERIFY_CHECKOUT=${{ steps.verify_checkout.outcome }}"
+            echo "DELIVERY_ID=${{ steps.delivery.outcome }}"
+          } >> "$GITHUB_ENV"
+
       - name: L1 — build health metrics for HUD
         id: health_metrics
         if: always() && steps.probe.outputs.hud_callbacks == 'true'
         run: |
+          mapfile -t CHECK_ARGS < <(bash scripts/health_checks.sh l1-full)
           python3 tests/write_health_report.py \
             --probe l1-critical \
-            --output health-report.json \
             --delivery-id "${{ github.event.client_payload.delivery_id }}" \
             --run-id "${{ github.run_id }}" \
             --event-type "${{ github.event.client_payload.event_type }}" \
             --pr-number "${{ github.event.client_payload.payload.pull_request.number || '' }}" \
-            --check "validate_payload=${{ steps.validate_payload.outcome }}" \
-            --check "in_progress_callback=${{ steps.in_progress.outcome }}" \
-            --check "checkout_pytorch=${{ steps.checkout_pytorch.outcome }}" \
-            --check "verify_checkout=${{ steps.verify_checkout.outcome }}" \
-            --check "delivery_id=${{ steps.delivery.outcome }}" \
+            "${CHECK_ARGS[@]}" \
             --github-output "$GITHUB_OUTPUT"
 
       - name: L1 — report completed with health metrics to relay/HUD
@@ -159,6 +166,13 @@ jobs:
       - name: L1 — write light health report (no HUD callbacks)
         if: always() && steps.probe.outputs.hud_callbacks != 'true'
         run: |
+          {
+            echo "VALIDATE_PAYLOAD=${{ steps.validate_payload.outcome }}"
+            echo "CHECKOUT_PYTORCH=${{ steps.checkout_pytorch.outcome }}"
+            echo "VERIFY_CHECKOUT=${{ steps.verify_checkout.outcome }}"
+            echo "DELIVERY_ID=${{ steps.delivery.outcome }}"
+          } >> "$GITHUB_ENV"
+          mapfile -t CHECK_ARGS < <(bash scripts/health_checks.sh l1-light)
           python3 tests/write_health_report.py \
             --probe l1-light \
             --output health-report.json \
@@ -166,15 +180,18 @@ jobs:
             --run-id "${{ github.run_id }}" \
             --event-type "${{ github.event.client_payload.event_type }}" \
             --pr-number "${{ github.event.client_payload.payload.pull_request.number || '' }}" \
-            --check "validate_payload=${{ steps.validate_payload.outcome }}" \
-            --check "checkout_pytorch=${{ steps.checkout_pytorch.outcome }}" \
-            --check "verify_checkout=${{ steps.verify_checkout.outcome }}" \
-            --check "delivery_id=${{ steps.delivery.outcome }}" \
+            "${CHECK_ARGS[@]}" \
             --strict
 
-      - name: L1 — write full health report with callback outcome
+      # Artifact uses one more check than HUD test_results: completed_callback
+      # runs after the HUD POST, so its outcome is only known afterward.
+      - name: L1 — write full health report artifact
         if: always() && steps.probe.outputs.hud_callbacks == 'true'
+        env:
+          INCLUDE_COMPLETED_CALLBACK: "1"
+          COMPLETED_CALLBACK: ${{ steps.completed.outcome }}
         run: |
+          mapfile -t CHECK_ARGS < <(bash scripts/health_checks.sh l1-full)
           python3 tests/write_health_report.py \
             --probe l1-critical \
             --output health-report.json \
@@ -182,12 +199,7 @@ jobs:
             --run-id "${{ github.run_id }}" \
             --event-type "${{ github.event.client_payload.event_type }}" \
             --pr-number "${{ github.event.client_payload.payload.pull_request.number || '' }}" \
-            --check "validate_payload=${{ steps.validate_payload.outcome }}" \
-            --check "in_progress_callback=${{ steps.in_progress.outcome }}" \
-            --check "checkout_pytorch=${{ steps.checkout_pytorch.outcome }}" \
-            --check "verify_checkout=${{ steps.verify_checkout.outcome }}" \
-            --check "delivery_id=${{ steps.delivery.outcome }}" \
-            --check "completed_callback=${{ steps.completed.outcome }}" \
+            "${CHECK_ARGS[@]}" \
             --strict
 
       - uses: actions/upload-artifact@v4

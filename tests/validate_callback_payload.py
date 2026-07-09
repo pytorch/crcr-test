@@ -51,7 +51,7 @@ def main() -> int:
 
     expect_status = sys.argv[1]
     if expect_status not in ALLOWED_STATUSES:
-        print(f"::error::status arg must be in_progress or completed", file=sys.stderr)
+        print("::error::status arg must be in_progress or completed", file=sys.stderr)
         return 2
 
     try:

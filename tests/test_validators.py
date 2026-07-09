@@ -58,7 +58,7 @@ class TestCallbackPayload(unittest.TestCase):
             "schema_version": "1",
             "status": "completed",
             "conclusion": "success",
-            "name": "OOT L2 Critical",
+            "name": "CRCR L2 Critical",
             "url": "https://github.com/pytorch/crcr-test/actions/runs/1",
             "run_attempt": "1",
             "job_name": "l2-critical",
@@ -77,7 +77,7 @@ class TestCallbackPayload(unittest.TestCase):
             "schema_version": "1",
             "status": "in_progress",
             "conclusion": None,
-            "name": "OOT L2 Critical",
+            "name": "CRCR L2 Critical",
             "url": "https://github.com/pytorch/crcr-test/actions/runs/1",
             "run_attempt": "1",
             "job_name": "l2-critical",
@@ -102,10 +102,51 @@ class TestPytorchCheckout(unittest.TestCase):
     def test_checkout_matches_dispatch_sha(self) -> None:
         import subprocess
 
-        from validate_pytorch_checkout import _head_sha
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp_path = Path(tmp)
+            subprocess.run(["git", "init", tmp], check=True, capture_output=True)
+            subprocess.run(
+                ["git", "-C", tmp, "commit", "--allow-empty", "-m", "init"],
+                check=True,
+                capture_output=True,
+                env={
+                    **__import__("os").environ,
+                    "GIT_AUTHOR_NAME": "test",
+                    "GIT_AUTHOR_EMAIL": "test@test.com",
+                    "GIT_COMMITTER_NAME": "test",
+                    "GIT_COMMITTER_EMAIL": "test@test.com",
+                },
+            )
+            head = subprocess.run(
+                ["git", "-C", tmp, "rev-parse", "HEAD"],
+                check=True,
+                capture_output=True,
+                text=True,
+            )
+            matching_sha = head.stdout.strip()
 
-        payload = _load("pull_request_opened.json")
-        expected = _head_sha(payload)
+            payload = _load("pull_request_opened.json")
+            payload["payload"]["pull_request"]["head"]["sha"] = matching_sha
+            payload_path = tmp_path / "payload.json"
+            payload_path.write_text(json.dumps(payload))
+
+            result = subprocess.run(
+                [
+                    "python3",
+                    str(Path(__file__).parent / "validate_pytorch_checkout.py"),
+                    "--payload",
+                    str(payload_path),
+                    "--pytorch-dir",
+                    tmp,
+                ],
+                capture_output=True,
+                text=True,
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+
+    def test_checkout_mismatch_dispatch_sha(self) -> None:
+        import subprocess
+
         with tempfile.TemporaryDirectory() as tmp:
             subprocess.run(["git", "init", tmp], check=True, capture_output=True)
             subprocess.run(
@@ -120,7 +161,6 @@ class TestPytorchCheckout(unittest.TestCase):
                     "GIT_COMMITTER_EMAIL": "test@test.com",
                 },
             )
-            # Empty repo won't match arbitrary SHA; just verify script runs.
             result = subprocess.run(
                 [
                     "python3",

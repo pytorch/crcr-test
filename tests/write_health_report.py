@@ -72,7 +72,11 @@ def append_github_output(report: dict, github_output: str) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--probe", required=True, help="Probe name, e.g. l1-critical")
-    parser.add_argument("--output", required=True, help="Path to write JSON report")
+    parser.add_argument(
+        "--output",
+        default="",
+        help="Path to write JSON report (optional when only using --github-output)",
+    )
     parser.add_argument("--delivery-id", default="")
     parser.add_argument("--run-id", default="")
     parser.add_argument("--event-type", default="")
@@ -111,8 +115,9 @@ def main() -> int:
         pr_number=args.pr_number,
     )
 
-    output = Path(args.output)
-    output.write_text(json.dumps(report, indent=2) + "\n")
+    if args.output:
+        output = Path(args.output)
+        output.write_text(json.dumps(report, indent=2) + "\n")
     print(json.dumps(report))
 
     if args.github_output:
