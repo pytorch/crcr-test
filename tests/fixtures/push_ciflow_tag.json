@@ -1,0 +1,13 @@
+{
+  "event_type": "push",
+  "delivery_id": "test-delivery-push-001",
+  "payload": {
+    "ref": "refs/tags/ciflow/trunk/12345",
+    "after": "dddddddddddddddddddddddddddddddddddddddd",
+    "deleted": false,
+    "base_ref": "refs/heads/main",
+    "repository": {
+      "full_name": "pytorch/pytorch"
+    }
+  }
+}

@@ -7,7 +7,7 @@ on:
       - push
 
 run-name: >-
-  Dispatch -
+  L1 Health -
   ${{
     github.event.client_payload.event_type == 'pull_request' &&
     format(
@@ -26,48 +26,223 @@ concurrency:
 
 permissions:
   actions: write
+  id-token: write
 
 jobs:
   cancel-workflow:
     if: ${{ github.event.client_payload.payload.action == 'closed' }}
     runs-on: ubuntu-latest
     steps:
-      - run: echo "PR closed, canceling older runs in the same concurrency group"
-  inspect:
+      - uses: actions/checkout@v4
+
+      - name: Assert closed action skips build job
+        id: closed
+        run: |
+          ACTION="${{ github.event.client_payload.payload.action }}"
+          if [ "${ACTION}" != "closed" ]; then
+            echo "::error::expected action=closed, got ${ACTION}"
+            exit 1
+          fi
+          echo "PR closed — cancel-workflow job ran as expected"
+
+      - name: Write closed-event health report
+        if: always()
+        run: |
+          python3 tests/write_health_report.py \
+            --probe l1-closed \
+            --output health-report.json \
+            --delivery-id "${{ github.event.client_payload.delivery_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --event-type "${{ github.event.client_payload.event_type }}" \
+            --pr-number "${{ github.event.client_payload.payload.pull_request.number || '' }}" \
+            --check "closed_cancel=${{ steps.closed.outcome }}" \
+            --strict
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crcr-health-l1-closed-${{ github.run_id }}
+          path: health-report.json
+
+  l1-critical:
     if: ${{ github.event.client_payload.payload.action != 'closed' }}
     runs-on: ubuntu-latest
     steps:
-      - name: Display parsed fields
-        run: |
-          EVENT_TYPE="${{ github.event.client_payload.event_type }}"
-          echo "### Dispatch Summary" >> $GITHUB_STEP_SUMMARY
-          echo "" >> $GITHUB_STEP_SUMMARY
-          echo "| Field | Value |" >> $GITHUB_STEP_SUMMARY
-          echo "|-------|-------|" >> $GITHUB_STEP_SUMMARY
-          echo "| Event type | \`${EVENT_TYPE}\` |" >> $GITHUB_STEP_SUMMARY
-          echo "| Upstream repo | \`${{ github.event.client_payload.payload.repository.full_name }}\` |" >> $GITHUB_STEP_SUMMARY
+      - name: Checkout crcr-test
+        uses: actions/checkout@v4
 
-          if [ "$EVENT_TYPE" = "pull_request" ]; then
-            echo "| PR number | \`${{ github.event.client_payload.payload.pull_request.number }}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| PR action | \`${{ github.event.client_payload.payload.action }}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| PR title | \`${{ github.event.client_payload.payload.pull_request.title }}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| Head SHA | \`${{ github.event.client_payload.payload.pull_request.head.sha }}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| Head repo | \`${{ github.event.client_payload.payload.pull_request.head.repo.full_name }}\` |" >> $GITHUB_STEP_SUMMARY
-          elif [ "$EVENT_TYPE" = "push" ]; then
-            echo "| Ref | \`${{ github.event.client_payload.payload.ref }}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| SHA | \`${{ github.event.client_payload.payload.after }}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| Base ref | \`${{ github.event.client_payload.payload.base_ref }}\` |" >> $GITHUB_STEP_SUMMARY
-            echo "| Deleted | \`${{ github.event.client_payload.payload.deleted }}\` |" >> $GITHUB_STEP_SUMMARY
+      - name: L1 — resolve probe mode
+        id: probe
+        run: |
+          ACTION="${{ github.event.client_payload.payload.action }}"
+          EVENT="${{ github.event.client_payload.event_type }}"
+          if [ "$EVENT" = "pull_request" ] && { [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ]; }; then
+            echo "hud_callbacks=true" >> "$GITHUB_OUTPUT"
+            echo "probe=l1-critical" >> "$GITHUB_OUTPUT"
+          else
+            echo "hud_callbacks=false" >> "$GITHUB_OUTPUT"
+            echo "probe=l1-light" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Log full event to step summary
+      - name: L1 — validate dispatch payload structure
+        id: validate_payload
+        env:
+          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        run: echo "${CLIENT_PAYLOAD}" | python3 tests/validate_dispatch_payload.py
+
+      - name: L1 — report in_progress to relay
+        id: in_progress
+        if: steps.probe.outputs.hud_callbacks == 'true'
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+
+      - name: L1 — checkout PyTorch at dispatched SHA
+        id: checkout_pytorch
+        uses: actions/checkout@v4
+        with:
+          repository: pytorch/pytorch
+          ref: >-
+            ${{ github.event.client_payload.event_type == 'pull_request' &&
+            github.event.client_payload.payload.pull_request.head.sha ||
+            github.event.client_payload.payload.after }}
+          path: pytorch
+
+      - name: L1 — verify checkout matches dispatch SHA
+        id: verify_checkout
+        env:
+          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        run: |
+          echo "${CLIENT_PAYLOAD}" > /tmp/client_payload.json
+          python3 tests/validate_pytorch_checkout.py \
+            --payload /tmp/client_payload.json \
+            --pytorch-dir pytorch
+
+      - name: L1 — assert delivery_id is stable for L2 linkage
+        id: delivery
+        run: |
+          DELIVERY_ID="${{ github.event.client_payload.delivery_id }}"
+          if [ -z "${DELIVERY_ID}" ]; then
+            echo "::error::delivery_id is empty"
+            exit 1
+          fi
+          echo "delivery_id=${DELIVERY_ID}"
+
+      - name: L1 — export probe step outcomes
         if: always()
         run: |
+          {
+            echo "VALIDATE_PAYLOAD=${{ steps.validate_payload.outcome }}"
+            echo "IN_PROGRESS_CALLBACK=${{ steps.in_progress.outcome }}"
+            echo "CHECKOUT_PYTORCH=${{ steps.checkout_pytorch.outcome }}"
+            echo "VERIFY_CHECKOUT=${{ steps.verify_checkout.outcome }}"
+            echo "DELIVERY_ID=${{ steps.delivery.outcome }}"
+          } >> "$GITHUB_ENV"
+
+      - name: L1 — build health metrics for HUD
+        id: health_metrics
+        if: always() && steps.probe.outputs.hud_callbacks == 'true'
+        run: |
+          mapfile -t CHECK_ARGS < <(bash scripts/health_checks.sh l1-full)
+          python3 tests/write_health_report.py \
+            --probe l1-critical \
+            --delivery-id "${{ github.event.client_payload.delivery_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --event-type "${{ github.event.client_payload.event_type }}" \
+            --pr-number "${{ github.event.client_payload.payload.pull_request.number || '' }}" \
+            "${CHECK_ARGS[@]}" \
+            --github-output "$GITHUB_OUTPUT"
+
+      - name: L1 — report completed with health metrics to relay/HUD
+        id: completed
+        if: always() && steps.probe.outputs.hud_callbacks == 'true'
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: ${{ steps.health_metrics.outputs.conclusion || (job.status == 'success' && 'success' || 'failure') }}
+          test-results: ${{ steps.health_metrics.outputs.test_results }}
+          artifact-url: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+
+      - name: L1 — write light health report (no HUD callbacks)
+        if: always() && steps.probe.outputs.hud_callbacks != 'true'
+        run: |
+          {
+            echo "VALIDATE_PAYLOAD=${{ steps.validate_payload.outcome }}"
+            echo "CHECKOUT_PYTORCH=${{ steps.checkout_pytorch.outcome }}"
+            echo "VERIFY_CHECKOUT=${{ steps.verify_checkout.outcome }}"
+            echo "DELIVERY_ID=${{ steps.delivery.outcome }}"
+          } >> "$GITHUB_ENV"
+          mapfile -t CHECK_ARGS < <(bash scripts/health_checks.sh l1-light)
+          python3 tests/write_health_report.py \
+            --probe l1-light \
+            --output health-report.json \
+            --delivery-id "${{ github.event.client_payload.delivery_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --event-type "${{ github.event.client_payload.event_type }}" \
+            --pr-number "${{ github.event.client_payload.payload.pull_request.number || '' }}" \
+            "${CHECK_ARGS[@]}" \
+            --strict
+
+      # Artifact uses one more check than HUD test_results: completed_callback
+      # runs after the HUD POST, so its outcome is only known afterward.
+      - name: L1 — write full health report artifact
+        if: always() && steps.probe.outputs.hud_callbacks == 'true'
+        env:
+          INCLUDE_COMPLETED_CALLBACK: "1"
+          COMPLETED_CALLBACK: ${{ steps.completed.outcome }}
+        run: |
+          mapfile -t CHECK_ARGS < <(bash scripts/health_checks.sh l1-full)
+          python3 tests/write_health_report.py \
+            --probe l1-critical \
+            --output health-report.json \
+            --delivery-id "${{ github.event.client_payload.delivery_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --event-type "${{ github.event.client_payload.event_type }}" \
+            --pr-number "${{ github.event.client_payload.payload.pull_request.number || '' }}" \
+            "${CHECK_ARGS[@]}" \
+            --strict
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crcr-health-l1-${{ github.run_id }}
+          path: health-report.json
+
+      - name: Write integration summary
+        if: always()
+        run: |
+          EVENT_TYPE="${{ github.event.client_payload.event_type }}"
+          PROBE_MODE="${{ steps.probe.outputs.probe }}"
+          echo "### L1 Real-Time Dispatch Tests" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
-          echo "### Full Event Payload" >> $GITHUB_STEP_SUMMARY
+          if [ "${PROBE_MODE}" = "l1-critical" ]; then
+            echo "Probe mode: **full** (HUD callbacks on \`opened\`/\`reopened\`)." >> $GITHUB_STEP_SUMMARY
+            echo "Health metrics sent to HUD via \`completed\` callback \`test_results\`." >> $GITHUB_STEP_SUMMARY
+          else
+            echo "Probe mode: **light** (no HUD callbacks on \`synchronize\`/\`push\`; reduces relay 429 risk)." >> $GITHUB_STEP_SUMMARY
+          fi
           echo "" >> $GITHUB_STEP_SUMMARY
-          cat <<'EOF' >> $GITHUB_STEP_SUMMARY
-          ```json
-          ${{ toJson(github.event) }}
-          ```
-          EOF
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Payload structure | ${{ steps.validate_payload.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          if [ "${PROBE_MODE}" = "l1-critical" ]; then
+            echo "| in_progress callback | ${{ steps.in_progress.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| PyTorch checkout | ${{ steps.checkout_pytorch.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| SHA verification | ${{ steps.verify_checkout.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| delivery_id | ${{ steps.delivery.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          if [ "${PROBE_MODE}" = "l1-critical" ]; then
+            echo "| completed callback | ${{ steps.completed.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "| Event type | \`${EVENT_TYPE}\` |" >> $GITHUB_STEP_SUMMARY
+          if [ "$EVENT_TYPE" = "pull_request" ]; then
+            echo "| PR | #${{ github.event.client_payload.payload.pull_request.number }} (${{ github.event.client_payload.payload.action }}) |" >> $GITHUB_STEP_SUMMARY
+            echo "| Head SHA | \`${{ github.event.client_payload.payload.pull_request.head.sha }}\` |" >> $GITHUB_STEP_SUMMARY
+          else
+            echo "| Ref | \`${{ github.event.client_payload.payload.ref }}\` |" >> $GITHUB_STEP_SUMMARY
+            echo "| SHA | \`${{ github.event.client_payload.payload.after }}\` |" >> $GITHUB_STEP_SUMMARY
+          fi
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "HUD: [crcr-test dashboard](https://hud.pytorch.org/crcr/pytorch/crcr-test) (run_id \`${{ github.run_id }}\`)" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "delivery_id: \`${{ github.event.client_payload.delivery_id }}\`" >> $GITHUB_STEP_SUMMARY
