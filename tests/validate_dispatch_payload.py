@@ -12,6 +12,7 @@ UPSTREAM_REPO = "pytorch/pytorch"
 ALLOWED_EVENT_TYPES = frozenset({"pull_request", "push"})
 ALLOWED_PR_ACTIONS = frozenset({"opened", "reopened", "synchronize", "closed"})
 SHA_RE = re.compile(r"^[0-9a-f]{40}$")
+NULL_SHA = "0" * 40
 
 
 class ValidationError(Exception):
@@ -82,9 +83,19 @@ def validate_dispatch_payload(client_payload: dict[str, Any]) -> None:
         if not isinstance(ref, str) or not ref.startswith("refs/"):
             raise ValidationError(f"push ref must start with refs/, got {ref!r}")
         deleted = payload.get("deleted", False)
-        if not deleted:
+        if deleted:
+            after = payload.get("after", "")
+            if after != NULL_SHA:
+                raise ValidationError(
+                    f"deleted push must have null after SHA {NULL_SHA!r}, got {after!r}"
+                )
+        else:
             after = _require(payload, "after", "client_payload.payload")
             _require_sha(after, "payload.after")
+            if after == NULL_SHA:
+                raise ValidationError(
+                    "non-deleted push must not use the null after SHA; set deleted=true"
+                )
 
 
 def main() -> int:

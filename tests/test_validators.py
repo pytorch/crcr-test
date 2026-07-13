@@ -32,6 +32,15 @@ class TestDispatchPayload(unittest.TestCase):
     def test_push_ciflow_tag_fixture(self) -> None:
         validate_dispatch_payload(_load("push_ciflow_tag.json"))
 
+    def test_push_tag_deleted_fixture(self) -> None:
+        validate_dispatch_payload(_load("push_tag_deleted.json"))
+
+    def test_rejects_non_deleted_push_with_null_after(self) -> None:
+        payload = _load("push_ciflow_tag.json")
+        payload["payload"]["after"] = "0" * 40
+        with self.assertRaises(ValidationError):
+            validate_dispatch_payload(payload)
+
     def test_rejects_missing_delivery_id(self) -> None:
         payload = _load("pull_request_opened.json")
         del payload["delivery_id"]

@@ -168,9 +168,12 @@ Health probes use **tiered coverage** by event type:
 | `opened`, `reopened` | Full probe + HUD | Full probe + HUD | **4** | **2** |
 | `synchronize` | Light probe (validate + checkout) | Skipped | **0** | **0** |
 | `closed` | Cancel job only | Cancel job only | **0** | **0** |
-| `push` / ciflow tag | Light probe (validate + checkout) | N/A | **0** | **0** |
+| `push` / ciflow tag (create/update) | Light probe (validate + checkout) | N/A | **0** | **0** |
+| `push` + `deleted: true` (tag/branch removal) | Push-deleted probe (no checkout) | N/A | **0** | **0** |
 
 **Light probe** (`l1-light`): validates dispatch payload, checks out PyTorch at the dispatched SHA, verifies the checkout, asserts `delivery_id`, uploads `health-report.json` — no relay callbacks.
+
+**Push-deleted probe** (`l1-push-deleted`): validates deletion dispatches where GitHub sets `after` to the null SHA (`0000...`). Asserts payload shape and `delivery_id`; skips checkout (there is no commit to build).
 
 **Full probe** (`l1-critical` / `l2-critical`): light checks plus `in_progress`/`completed` callbacks and HUD `test_results`. Callback mechanics are the same regardless of PR `action`; limiting callbacks to `opened`/`reopened` keeps coverage on low-volume events while `synchronize` still exercises dispatch delivery every upstream push.
 
@@ -181,7 +184,8 @@ Health probes use **tiered coverage** by event type:
 | PyTorch PR `opened` / `reopened` | L1 full + L2 full (HUD callbacks) |
 | PyTorch PR `synchronize` | L1 light only (no callbacks, no L2) |
 | PyTorch PR `closed` | L1/L2 cancel jobs only (build jobs skipped) |
-| PyTorch push / ciflow tag | L1 light only (no callbacks) |
+| PyTorch push / ciflow tag (create or update) | L1 light only (no callbacks) |
+| PyTorch push with `deleted: true` (tag/branch removal) | L1 push-deleted probe only (no checkout) |
 | Merge to crcr-test main | `crcr-unit-tests` only (offline contract tests) |
 
 ### L1 integration points
@@ -190,7 +194,8 @@ Health probes use **tiered coverage** by event type:
 - `client_payload.delivery_id` is present (required for L2 state tracking)
 - `client_payload.payload.repository.full_name` is `pytorch/pytorch`
 - PR events: `action` in `opened`/`reopened`/`synchronize`/`closed`, valid `pull_request.head.sha`
-- Push events: `ref` starts with `refs/`, valid `after` SHA
+- Push events: `ref` starts with `refs/`, valid `after` SHA when `deleted` is false
+- Deleted push events: `deleted: true` and `after` is the GitHub null SHA (`0000...`); no checkout
 - PyTorch checkout resolves to the dispatched SHA
 - `closed` action runs only the cancel job (no build)
 - **`opened`/`reopened`**: full probe with `in_progress`/`completed` callbacks to HUD
