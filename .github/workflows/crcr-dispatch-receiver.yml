@@ -64,8 +64,93 @@ jobs:
           name: crcr-health-l1-closed-${{ github.run_id }}
           path: health-report.json
 
+  push-deleted:
+    if: >-
+      github.event.client_payload.event_type == 'push' &&
+      github.event.client_payload.payload.deleted == true
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Assert push deletion semantics
+        id: push_deleted
+        run: |
+          AFTER="${{ github.event.client_payload.payload.after }}"
+          REF="${{ github.event.client_payload.payload.ref }}"
+          if [ "${AFTER}" != "0000000000000000000000000000000000000000" ]; then
+            echo "::error::expected null after SHA on deleted push, got ${AFTER}"
+            exit 1
+          fi
+          if [[ ! "${REF}" =~ ^refs/ ]]; then
+            echo "::error::expected refs/ prefix on deleted push ref, got ${REF}"
+            exit 1
+          fi
+          echo "Push deletion for ${REF} — skipping checkout"
+
+      - name: L1 — validate dispatch payload structure
+        id: validate_payload
+        env:
+          CLIENT_PAYLOAD: ${{ toJson(github.event.client_payload) }}
+        run: echo "${CLIENT_PAYLOAD}" | python3 tests/validate_dispatch_payload.py
+
+      - name: L1 — assert delivery_id is present
+        id: delivery
+        run: |
+          DELIVERY_ID="${{ github.event.client_payload.delivery_id }}"
+          if [ -z "${DELIVERY_ID}" ]; then
+            echo "::error::delivery_id is empty"
+            exit 1
+          fi
+          echo "delivery_id=${DELIVERY_ID}"
+
+      - name: Write push-deleted health report
+        if: always()
+        run: |
+          {
+            echo "PUSH_DELETED_SEMANTICS=${{ steps.push_deleted.outcome }}"
+            echo "VALIDATE_PAYLOAD=${{ steps.validate_payload.outcome }}"
+            echo "DELIVERY_ID=${{ steps.delivery.outcome }}"
+          } >> "$GITHUB_ENV"
+          mapfile -t CHECK_ARGS < <(bash scripts/health_checks.sh l1-push-deleted)
+          python3 tests/write_health_report.py \
+            --probe l1-push-deleted \
+            --output health-report.json \
+            --delivery-id "${{ github.event.client_payload.delivery_id }}" \
+            --run-id "${{ github.run_id }}" \
+            --event-type push \
+            --pr-number "" \
+            "${CHECK_ARGS[@]}" \
+            --strict
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: crcr-health-l1-push-deleted-${{ github.run_id }}
+          path: health-report.json
+
+      - name: Write push-deleted summary
+        if: always()
+        run: |
+          echo "### L1 Push Deletion Probe" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "GitHub sends \`after: 0000...\` when a branch or tag is deleted. No PyTorch checkout." >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Check | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|-------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Deletion semantics | ${{ steps.push_deleted.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Payload structure | ${{ steps.validate_payload.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "| delivery_id | ${{ steps.delivery.outcome }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Ref | \`${{ github.event.client_payload.payload.ref }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Before SHA | \`${{ github.event.client_payload.payload.before }}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "delivery_id: \`${{ github.event.client_payload.delivery_id }}\`" >> $GITHUB_STEP_SUMMARY
+
   l1-critical:
-    if: ${{ github.event.client_payload.payload.action != 'closed' }}
+    if: >-
+      github.event.client_payload.payload.action != 'closed' &&
+      !(github.event.client_payload.event_type == 'push' &&
+      github.event.client_payload.payload.deleted == true)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout crcr-test
