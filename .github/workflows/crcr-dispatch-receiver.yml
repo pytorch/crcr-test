@@ -103,7 +103,7 @@ jobs:
           fi
           echo "delivery_id=${DELIVERY_ID}"
 
-      - name: Write push-deleted health report
+      - name: L1 — export push-deleted step outcomes
         if: always()
         run: |
           {
@@ -111,6 +111,10 @@ jobs:
             echo "VALIDATE_PAYLOAD=${{ steps.validate_payload.outcome }}"
             echo "DELIVERY_ID=${{ steps.delivery.outcome }}"
           } >> "$GITHUB_ENV"
+
+      - name: Write push-deleted health report
+        if: always()
+        run: |
           mapfile -t CHECK_ARGS < <(bash scripts/health_checks.sh l1-push-deleted)
           python3 tests/write_health_report.py \
             --probe l1-push-deleted \
