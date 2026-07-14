@@ -29,8 +29,12 @@ permissions:
   id-token: write
 
 jobs:
+  # Cleanup for abandoned PRs only. Merged PRs (closed + merged) fall through to
+  # the l1-critical job instead of being treated as a plain close.
   cancel-workflow:
-    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    if: >-
+      github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -150,11 +154,19 @@ jobs:
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "delivery_id: \`${{ github.event.client_payload.delivery_id }}\`" >> $GITHUB_STEP_SUMMARY
 
+  # Push events still run the L1 health probe (the merged/label filter is
+  # PR-specific). For pull_request events, only run when the PR is merged, or
+  # when it carries the ciflow/crcr label (opt-in pre-merge testing).
   l1-critical:
     if: >-
-      github.event.client_payload.payload.action != 'closed' &&
       !(github.event.client_payload.event_type == 'push' &&
-      github.event.client_payload.payload.deleted == true)
+      github.event.client_payload.payload.deleted == true) &&
+      (github.event.client_payload.event_type == 'push' ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true) ||
+      (github.event.client_payload.payload.action != 'closed' &&
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr')))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout crcr-test
@@ -163,9 +175,12 @@ jobs:
       - name: L1 — resolve probe mode
         id: probe
         run: |
-          ACTION="${{ github.event.client_payload.payload.action }}"
           EVENT="${{ github.event.client_payload.event_type }}"
-          if [ "$EVENT" = "pull_request" ] && { [ "$ACTION" = "opened" ] || [ "$ACTION" = "reopened" ]; }; then
+          # Any pull_request event that reaches this job is one we intentionally
+          # run (merged PR, or ciflow/crcr-labeled PR), so report full HUD
+          # callbacks. Push events stay in light mode (no HUD callbacks) to keep
+          # relay 429 risk down, as before.
+          if [ "$EVENT" = "pull_request" ]; then
             echo "hud_callbacks=true" >> "$GITHUB_OUTPUT"
             echo "probe=l1-critical" >> "$GITHUB_OUTPUT"
           else

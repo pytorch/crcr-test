@@ -21,8 +21,12 @@ permissions:
   id-token: write
 
 jobs:
+  # Cleanup for abandoned PRs only. Merged PRs (closed + merged) fall through to
+  # the l2-critical job instead of being treated as a plain close.
   cancel-workflow:
-    if: ${{ github.event.client_payload.payload.action == 'closed' }}
+    if: >-
+      github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged != true
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -50,8 +54,16 @@ jobs:
           name: crcr-health-l2-closed-${{ github.run_id }}
           path: health-report.json
 
+  # Only run when the PyTorch PR is merged, or when it carries the ciflow/crcr
+  # label (opt-in pre-merge testing). Plain opened/synchronize without the label
+  # is skipped to avoid running on every PR.
   l2-critical:
-    if: contains(fromJSON('["opened","reopened"]'), github.event.client_payload.payload.action)
+    if: >-
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true) ||
+      (github.event.client_payload.payload.action != 'closed' &&
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout crcr-test
