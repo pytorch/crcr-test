@@ -153,22 +153,25 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 
 | Workflow | Level | Trigger | What it verifies |
 |----------|-------|---------|------------------|
-| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request` (merged or `ciflow/crcr`-labeled), `push` | Dispatch payload, checkout SHA, `delivery_id`; HUD callbacks on every PR event it runs |
-| [`crcr-l2-ci.yml`](.github/workflows/crcr-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (merged or `ciflow/crcr`-labeled) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
-| [`oot-l3-ci.yml`](.github/workflows/oot-l3-ci.yml) | L3 | live `repository_dispatch`: `pull_request` (merged or `ciflow/crcr`-labeled) | Relay handling of success/failure/cancel/timeout and matrix (per-job) check runs |
+| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or merged & unlabeled), `push` | Dispatch payload, checkout SHA, `delivery_id`; HUD callbacks on every PR event it runs |
+| [`crcr-l2-ci.yml`](.github/workflows/crcr-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or merged & unlabeled) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
+| [`oot-l3-ci.yml`](.github/workflows/oot-l3-ci.yml) | L3 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or merged & unlabeled) | Relay handling of success/failure/cancel/timeout and matrix (per-job) check runs |
 | [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Offline | push/PR to this repo only | Validator unit tests against JSON fixtures (guards test code, not live CRCR) |
 
-### Event filtering (merged / labeled PRs, relay rate limits)
+### Event filtering (labeled / merged PRs, relay rate limits)
 
-The probe workflows run only when a PyTorch PR is **merged** or carries the **`ciflow/crcr`** label. This matches RFC-0050 (L3 downstream CI is opt-in, not every-PR) and keeps callback volume low: unlabeled PRs — the vast majority — are skipped entirely and send **zero** callbacks, a large net reduction versus the previous "run on every PR" behavior. The relay callback Lambda also enforces a sliding-window rate limit (see [crcr-test#8](https://github.com/pytorch/crcr-test/issues/8)); a full L1+L2 probe sends **4 callbacks** (`in_progress` + `completed` x2).
+The probe workflows run when a PyTorch PR carries the **`ciflow/crcr/crcr-test`** label (opt-in pre-merge testing), or post-merge **only when the PR was not labeled** — a labeled PR already ran pre-merge, so it is not re-run on merge. This matches RFC-0050 (L3 downstream CI is opt-in, not every-PR) and keeps callback volume low: unlabeled PRs — the vast majority — send **zero** callbacks pre-merge and run at most once, on merge. The relay callback Lambda also enforces a sliding-window rate limit (see [crcr-test#8](https://github.com/pytorch/crcr-test/issues/8)); a full L1+L2 probe sends **4 callbacks** (`in_progress` + `completed` x2).
+
+The label is matched exactly (`ciflow/crcr/crcr-test`), so labels for other downstream repos (e.g. `ciflow/crcr/<other>`) do not trigger this repo.
 
 Coverage by event, for the PRs that run:
 
 | Event | L1 workflow | L2 workflow | Relay callbacks | HUD rows |
 |-------|-------------|-------------|-----------------|----------|
-| `opened` / `reopened` / `synchronize`, **no `ciflow/crcr` label** | Skipped | Skipped | **0** | **0** |
-| `opened` / `reopened` / `synchronize`, **`ciflow/crcr` labeled** | Full probe + HUD | Full probe + HUD | **4** per event | **2** |
-| `closed` **+ merged** | Full probe + HUD | Full probe + HUD | **4** | **2** |
+| `opened` / `reopened` / `synchronize`, **not `ciflow/crcr/crcr-test` labeled** | Skipped | Skipped | **0** | **0** |
+| `opened` / `reopened` / `synchronize`, **`ciflow/crcr/crcr-test` labeled** | Full probe + HUD | Full probe + HUD | **4** per event | **2** |
+| `closed` **+ merged, was not labeled** | Full probe + HUD | Full probe + HUD | **4** | **2** |
+| `closed` **+ merged, was labeled** | Skipped (already ran pre-merge) | Skipped | **0** | **0** |
 | `closed` **not merged** (abandoned) | Cancel job only | Cancel job only | **0** | **0** |
 | `push` / ciflow tag (create/update) | Light probe (validate + checkout) | N/A | **0** | **0** |
 | `push` + `deleted: true` (tag/branch removal) | Push-deleted probe (no checkout) | N/A | **0** | **0** |
@@ -177,15 +180,16 @@ Coverage by event, for the PRs that run:
 
 **Push-deleted probe** (`l1-push-deleted`): validates deletion dispatches where GitHub sets `after` to the null SHA (`0000...`). Asserts payload shape and `delivery_id`; skips checkout (there is no commit to build).
 
-**Full probe** (`l1-critical` / `l2-critical`): light checks plus `in_progress`/`completed` callbacks and HUD `test_results`. Callback mechanics are the same regardless of PR `action`. For `ciflow/crcr`-labeled PRs, full callbacks now fire on `synchronize` too (previously light); because labeling is opt-in and rare, aggregate volume stays well below the old every-PR baseline, and `cancel-in-progress` concurrency trims callbacks from superseded runs.
+**Full probe** (`l1-critical` / `l2-critical`): light checks plus `in_progress`/`completed` callbacks and HUD `test_results`. Callback mechanics are the same regardless of PR `action`. For `ciflow/crcr/crcr-test`-labeled PRs, full callbacks now fire on `synchronize` too (previously light); because labeling is opt-in and rare, aggregate volume stays well below the old every-PR baseline, and `cancel-in-progress` concurrency trims callbacks from superseded runs.
 
 ### When tests run
 
 | Event | What runs |
 |-------|-----------|
-| PyTorch PR `opened`/`reopened`/`synchronize`, **`ciflow/crcr` labeled** | L1 + L2 + L3 full (HUD callbacks) |
+| PyTorch PR `opened`/`reopened`/`synchronize`, **`ciflow/crcr/crcr-test` labeled** | L1 + L2 + L3 full (HUD callbacks) |
 | PyTorch PR `opened`/`reopened`/`synchronize`, **unlabeled** | Nothing (skipped) |
-| PyTorch PR `closed` **+ merged** | L1 + L2 + L3 full (HUD callbacks) |
+| PyTorch PR `closed` **+ merged, was not labeled** | L1 + L2 + L3 full (HUD callbacks) |
+| PyTorch PR `closed` **+ merged, was labeled** | Nothing (already ran pre-merge) |
 | PyTorch PR `closed` **not merged** (abandoned) | L1/L2/L3 cancel jobs only (build jobs skipped) |
 | PyTorch push / ciflow tag (create or update) | L1 light only (no callbacks) |
 | PyTorch push with `deleted: true` (tag/branch removal) | L1 push-deleted probe only (no checkout) |
@@ -200,14 +204,14 @@ Coverage by event, for the PRs that run:
 - Push events: `ref` starts with `refs/`, valid `after` SHA when `deleted` is false
 - Deleted push events: `deleted: true` and `after` is the GitHub null SHA (`0000...`); no checkout
 - PyTorch checkout resolves to the dispatched SHA
-- Runs only for **merged** PRs or PRs carrying the **`ciflow/crcr`** label; unlabeled non-merged PRs are skipped
+- Runs for PRs carrying the **`ciflow/crcr/crcr-test`** label, or post-merge only when the PR was **not** labeled; unlabeled non-merged PRs are skipped
 - `closed` + not merged (abandoned) runs only the cancel job (no build)
-- **labeled `opened`/`reopened`/`synchronize`** and **merged**: full probe with `in_progress`/`completed` callbacks to HUD
+- **labeled `opened`/`reopened`/`synchronize`**, and **merged-but-unlabeled**: full probe with `in_progress`/`completed` callbacks to HUD
 - **`push`**: light probe only (payload + checkout; no callbacks)
 
 ### L2 integration points
 
-- Runs only for **merged** PRs or PRs carrying the **`ciflow/crcr`** label (unlabeled non-merged PRs skipped)
+- Runs for PRs carrying the **`ciflow/crcr/crcr-test`** label, or post-merge only when the PR was **not** labeled (unlabeled non-merged PRs skipped)
 - OIDC token minting (`id-token: write`)
 - `in_progress` callback accepted by relay (state machine: `DISPATCHED → IN_PROGRESS`)
 - Deterministic smoke checks (no random pass/fail)

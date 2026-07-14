@@ -155,18 +155,21 @@ jobs:
           echo "delivery_id: \`${{ github.event.client_payload.delivery_id }}\`" >> $GITHUB_STEP_SUMMARY
 
   # Push events still run the L1 health probe (the merged/label filter is
-  # PR-specific). For pull_request events, only run when the PR is merged, or
-  # when it carries the ciflow/crcr label (opt-in pre-merge testing).
+  # PR-specific). For pull_request events, run when the PR carries the
+  # ciflow/crcr/crcr-test label (opt-in pre-merge testing), or post-merge ONLY
+  # when it was not labeled — a labeled PR already ran pre-merge.
   l1-critical:
     if: >-
       !(github.event.client_payload.event_type == 'push' &&
       github.event.client_payload.payload.deleted == true) &&
       (github.event.client_payload.event_type == 'push' ||
-      (github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged == true) ||
       (github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr')))
+      'ciflow/crcr/crcr-test')) ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test')))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout crcr-test

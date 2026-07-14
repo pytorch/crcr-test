@@ -33,15 +33,17 @@ jobs:
 
   # Reports completed/success.
   test-success:
-    # Only run when the PyTorch PR is merged, or when it carries the
-    # ciflow/crcr label (opt-in pre-merge testing). Plain opened/synchronize
-    # without the label is skipped to avoid running on every PR.
+    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
+    # pre-merge testing), or post-merge ONLY when it was not labeled — a
+    # labeled PR already ran pre-merge, so don't run it again on merge.
     if: >-
-      (github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged == true) ||
       (github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr'))
+      'ciflow/crcr/crcr-test')) ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test'))
     runs-on: ubuntu-latest
     steps:
       - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
@@ -57,15 +59,17 @@ jobs:
   # Real failure: a step exits non-zero, so the job actually fails and the
   # completed callback reports the real job.status (= failure).
   test-failure:
-    # Only run when the PyTorch PR is merged, or when it carries the
-    # ciflow/crcr label (opt-in pre-merge testing). Plain opened/synchronize
-    # without the label is skipped to avoid running on every PR.
+    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
+    # pre-merge testing), or post-merge ONLY when it was not labeled — a
+    # labeled PR already ran pre-merge, so don't run it again on merge.
     if: >-
-      (github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged == true) ||
       (github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr'))
+      'ciflow/crcr/crcr-test')) ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test'))
     runs-on: ubuntu-latest
     steps:
       - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
@@ -84,15 +88,17 @@ jobs:
   # only (siblings keep running, unlike cancelling the whole run). The always()
   # callback still fires during cancellation and reports the real job.status.
   test-cancel:
-    # Only run when the PyTorch PR is merged, or when it carries the
-    # ciflow/crcr label (opt-in pre-merge testing). Plain opened/synchronize
-    # without the label is skipped to avoid running on every PR.
+    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
+    # pre-merge testing), or post-merge ONLY when it was not labeled — a
+    # labeled PR already ran pre-merge, so don't run it again on merge.
     if: >-
-      (github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged == true) ||
       (github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr'))
+      'ciflow/crcr/crcr-test')) ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test'))
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
@@ -109,15 +115,17 @@ jobs:
   # Real timeout: reports in_progress but never reports completed, so the relay's
   # zombie sweeper times it out after ZOMBIE_TIMEOUT_SECONDS (not a faked conclusion).
   test-timeout:
-    # Only run when the PyTorch PR is merged, or when it carries the
-    # ciflow/crcr label (opt-in pre-merge testing). Plain opened/synchronize
-    # without the label is skipped to avoid running on every PR.
+    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
+    # pre-merge testing), or post-merge ONLY when it was not labeled — a
+    # labeled PR already ran pre-merge, so don't run it again on merge.
     if: >-
-      (github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged == true) ||
       (github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr'))
+      'ciflow/crcr/crcr-test')) ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test'))
     runs-on: ubuntu-latest
     steps:
       - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
@@ -128,15 +136,17 @@ jobs:
   # Matrix: each leg gets its own check run via a matrix-scoped job-name.
   # Also tests that the relay can handle concurrent jobs.
   test-matrix:
-    # Only run when the PyTorch PR is merged, or when it carries the
-    # ciflow/crcr label (opt-in pre-merge testing). Plain opened/synchronize
-    # without the label is skipped to avoid running on every PR.
+    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
+    # pre-merge testing), or post-merge ONLY when it was not labeled — a
+    # labeled PR already ran pre-merge, so don't run it again on merge.
     if: >-
-      (github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged == true) ||
       (github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr'))
+      'ciflow/crcr/crcr-test')) ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test'))
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false

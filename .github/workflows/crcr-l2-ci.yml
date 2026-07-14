@@ -54,16 +54,18 @@ jobs:
           name: crcr-health-l2-closed-${{ github.run_id }}
           path: health-report.json
 
-  # Only run when the PyTorch PR is merged, or when it carries the ciflow/crcr
-  # label (opt-in pre-merge testing). Plain opened/synchronize without the label
-  # is skipped to avoid running on every PR.
+  # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
+  # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
+  # PR already ran pre-merge, so don't run it again on merge.
   l2-critical:
     if: >-
-      (github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged == true) ||
       (github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr'))
+      'ciflow/crcr/crcr-test')) ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      github.event.client_payload.payload.pull_request.merged == true &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test'))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout crcr-test
