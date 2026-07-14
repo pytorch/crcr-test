@@ -29,12 +29,15 @@ permissions:
   id-token: write
 
 jobs:
-  # Cleanup for abandoned PRs only. Merged PRs (closed + merged) fall through to
-  # the l1-critical job instead of being treated as a plain close.
+  # Cleanup for abandoned PRs only (closed but not landed). Landed PRs — GitHub
+  # merged==true OR the pytorch merge-bot "Merged" label — fall through to the
+  # l1-critical job instead of being treated as a plain close.
   cancel-workflow:
     if: >-
       github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged != true
+      github.event.client_payload.payload.pull_request.merged != true &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'Merged')
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -155,18 +158,25 @@ jobs:
           echo "delivery_id: \`${{ github.event.client_payload.delivery_id }}\`" >> $GITHUB_STEP_SUMMARY
 
   # Push events still run the L1 health probe (the merged/label filter is
-  # PR-specific). For pull_request events, only run when the PR is merged, or
-  # when it carries the ciflow/crcr label (opt-in pre-merge testing).
+  # PR-specific). For pull_request events, run when the PR carries the
+  # ciflow/crcr/crcr-test label (opt-in pre-merge testing), or post-merge ONLY
+  # when it was not labeled. A PR is "landed" when closed with GitHub
+  # merged==true OR the pytorch merge-bot "Merged" label (ghstack/co-dev PRs
+  # close with merged==false, so the label is the reliable signal).
   l1-critical:
     if: >-
       !(github.event.client_payload.event_type == 'push' &&
       github.event.client_payload.payload.deleted == true) &&
       (github.event.client_payload.event_type == 'push' ||
-      (github.event.client_payload.payload.action == 'closed' &&
-      github.event.client_payload.payload.pull_request.merged == true) ||
       (github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr')))
+      'ciflow/crcr/crcr-test')) ||
+      (github.event.client_payload.payload.action == 'closed' &&
+      (github.event.client_payload.payload.pull_request.merged == true ||
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'Merged')) &&
+      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test')))
     runs-on: ubuntu-latest
     steps:
       - name: Checkout crcr-test
