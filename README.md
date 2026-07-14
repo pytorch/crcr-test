@@ -32,7 +32,7 @@ Each downstream repository is assigned a trust level that determines how deeply 
 |-------|------|-------------|
 | **L1** | Onboarding | Events are forwarded to downstream, but upstream receives no feedback. |
 | **L2** | Observation | Downstream CI results are displayed on the [HUD](https://hud.pytorch.org) page, but not on PRs. |
-| **L3** | Stable | Adds a non-blocking check run on PRs when `ciflow/oot/<name>` label is applied. |
+| **L3** | Stable | Adds a non-blocking check run on PRs when `ciflow/crcr/<name>` label is applied. |
 | **L4** | Mature | Adds a blocking check run on every PR; reserved for critical accelerators. |
 
 All new repositories start at **L1**. Promotion to higher levels is based on demonstrated stability and reliability.
@@ -153,21 +153,23 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 
 | Workflow | Level | Trigger | What it verifies |
 |----------|-------|---------|------------------|
-| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request`, `push` | Dispatch payload, checkout SHA, `delivery_id`; HUD callbacks on `opened`/`reopened` only |
-| [`crcr-l2-ci.yml`](.github/workflows/crcr-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (`opened`/`reopened` only) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
+| [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request` (merged or `ciflow/crcr`-labeled), `push` | Dispatch payload, checkout SHA, `delivery_id`; HUD callbacks on every PR event it runs |
+| [`crcr-l2-ci.yml`](.github/workflows/crcr-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (merged or `ciflow/crcr`-labeled) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
+| [`oot-l3-ci.yml`](.github/workflows/oot-l3-ci.yml) | L3 | live `repository_dispatch`: `pull_request` (merged or `ciflow/crcr`-labeled) | Relay handling of success/failure/cancel/timeout and matrix (per-job) check runs |
 | [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Offline | push/PR to this repo only | Validator unit tests against JSON fixtures (guards test code, not live CRCR) |
 
-### Event filtering (relay rate limits)
+### Event filtering (merged / labeled PRs, relay rate limits)
 
-The relay callback Lambda enforces a per-repo sliding-window rate limit (see [crcr-test#8](https://github.com/pytorch/crcr-test/issues/8)). A full L1+L2 probe sends **4 callbacks** (`in_progress` + `completed` x2). PyTorch `synchronize` events are high volume and can exceed the limit during busy periods.
+The probe workflows run only when a PyTorch PR is **merged** or carries the **`ciflow/crcr`** label. This matches RFC-0050 (L3 downstream CI is opt-in, not every-PR) and keeps callback volume low: unlabeled PRs — the vast majority — are skipped entirely and send **zero** callbacks, a large net reduction versus the previous "run on every PR" behavior. The relay callback Lambda also enforces a sliding-window rate limit (see [crcr-test#8](https://github.com/pytorch/crcr-test/issues/8)); a full L1+L2 probe sends **4 callbacks** (`in_progress` + `completed` x2).
 
-Health probes use **tiered coverage** by event type:
+Coverage by event, for the PRs that run:
 
 | Event | L1 workflow | L2 workflow | Relay callbacks | HUD rows |
 |-------|-------------|-------------|-----------------|----------|
-| `opened`, `reopened` | Full probe + HUD | Full probe + HUD | **4** | **2** |
-| `synchronize` | Light probe (validate + checkout) | Skipped | **0** | **0** |
-| `closed` | Cancel job only | Cancel job only | **0** | **0** |
+| `opened` / `reopened` / `synchronize`, **no `ciflow/crcr` label** | Skipped | Skipped | **0** | **0** |
+| `opened` / `reopened` / `synchronize`, **`ciflow/crcr` labeled** | Full probe + HUD | Full probe + HUD | **4** per event | **2** |
+| `closed` **+ merged** | Full probe + HUD | Full probe + HUD | **4** | **2** |
+| `closed` **not merged** (abandoned) | Cancel job only | Cancel job only | **0** | **0** |
 | `push` / ciflow tag (create/update) | Light probe (validate + checkout) | N/A | **0** | **0** |
 | `push` + `deleted: true` (tag/branch removal) | Push-deleted probe (no checkout) | N/A | **0** | **0** |
 
@@ -175,15 +177,16 @@ Health probes use **tiered coverage** by event type:
 
 **Push-deleted probe** (`l1-push-deleted`): validates deletion dispatches where GitHub sets `after` to the null SHA (`0000...`). Asserts payload shape and `delivery_id`; skips checkout (there is no commit to build).
 
-**Full probe** (`l1-critical` / `l2-critical`): light checks plus `in_progress`/`completed` callbacks and HUD `test_results`. Callback mechanics are the same regardless of PR `action`; limiting callbacks to `opened`/`reopened` keeps coverage on low-volume events while `synchronize` still exercises dispatch delivery every upstream push.
+**Full probe** (`l1-critical` / `l2-critical`): light checks plus `in_progress`/`completed` callbacks and HUD `test_results`. Callback mechanics are the same regardless of PR `action`. For `ciflow/crcr`-labeled PRs, full callbacks now fire on `synchronize` too (previously light); because labeling is opt-in and rare, aggregate volume stays well below the old every-PR baseline, and `cancel-in-progress` concurrency trims callbacks from superseded runs.
 
 ### When tests run
 
 | Event | What runs |
 |-------|-----------|
-| PyTorch PR `opened` / `reopened` | L1 full + L2 full (HUD callbacks) |
-| PyTorch PR `synchronize` | L1 light only (no callbacks, no L2) |
-| PyTorch PR `closed` | L1/L2 cancel jobs only (build jobs skipped) |
+| PyTorch PR `opened`/`reopened`/`synchronize`, **`ciflow/crcr` labeled** | L1 + L2 + L3 full (HUD callbacks) |
+| PyTorch PR `opened`/`reopened`/`synchronize`, **unlabeled** | Nothing (skipped) |
+| PyTorch PR `closed` **+ merged** | L1 + L2 + L3 full (HUD callbacks) |
+| PyTorch PR `closed` **not merged** (abandoned) | L1/L2/L3 cancel jobs only (build jobs skipped) |
 | PyTorch push / ciflow tag (create or update) | L1 light only (no callbacks) |
 | PyTorch push with `deleted: true` (tag/branch removal) | L1 push-deleted probe only (no checkout) |
 | Merge to crcr-test main | `crcr-unit-tests` only (offline contract tests) |
@@ -197,13 +200,14 @@ Health probes use **tiered coverage** by event type:
 - Push events: `ref` starts with `refs/`, valid `after` SHA when `deleted` is false
 - Deleted push events: `deleted: true` and `after` is the GitHub null SHA (`0000...`); no checkout
 - PyTorch checkout resolves to the dispatched SHA
-- `closed` action runs only the cancel job (no build)
-- **`opened`/`reopened`**: full probe with `in_progress`/`completed` callbacks to HUD
-- **`synchronize`/`push`**: light probe only (payload + checkout; no callbacks)
+- Runs only for **merged** PRs or PRs carrying the **`ciflow/crcr`** label; unlabeled non-merged PRs are skipped
+- `closed` + not merged (abandoned) runs only the cancel job (no build)
+- **labeled `opened`/`reopened`/`synchronize`** and **merged**: full probe with `in_progress`/`completed` callbacks to HUD
+- **`push`**: light probe only (payload + checkout; no callbacks)
 
 ### L2 integration points
 
-- Runs only on PR `opened` and `reopened` (skipped on `synchronize` to limit callback volume)
+- Runs only for **merged** PRs or PRs carrying the **`ciflow/crcr`** label (unlabeled non-merged PRs skipped)
 - OIDC token minting (`id-token: write`)
 - `in_progress` callback accepted by relay (state machine: `DISPATCHED → IN_PROGRESS`)
 - Deterministic smoke checks (no random pass/fail)
