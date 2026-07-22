@@ -20,7 +20,7 @@ run-name: >-
 
 concurrency:
   group: >-
-    oot-${{ github.event.client_payload.payload.repository.full_name }}-${{
+    crcr-${{ github.event.client_payload.payload.repository.full_name }}-${{
     github.event.client_payload.payload.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
