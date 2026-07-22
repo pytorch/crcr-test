@@ -158,6 +158,10 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 | [`crcr-l3-ci.yml`](.github/workflows/crcr-l3-ci.yml) | L3 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or landed & unlabeled) | Relay handling of success/failure/cancel/timeout and matrix (per-job) check runs |
 | [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Offline | push/PR to this repo only | Validator unit tests against JSON fixtures (guards test code, not live CRCR) |
 
+### Job naming convention
+
+Jobs prefixed `x` (`xfail`, `xcancel`, `xtimeout`) intentionally end in a non-success state to test the relay's handling of that outcome and the corresponding non-success check runs created in the PRs; a red check there is expected, not a bug.
+
 ### Event filtering (labeled / landed PRs, relay rate limits)
 
 The probe workflows run when a PyTorch PR carries the **`ciflow/crcr/crcr-test`** label (opt-in pre-merge testing), or post-merge **only when the PR was not labeled** — a labeled PR already ran pre-merge, so it is not re-run on landing. This matches RFC-0050 (L3 downstream CI is opt-in, not every-PR) and keeps callback volume low: unlabeled PRs — the vast majority — send **zero** callbacks pre-merge and run at most once, on landing. The relay callback Lambda also enforces a sliding-window rate limit (see [crcr-test#8](https://github.com/pytorch/crcr-test/issues/8)); a full L1+L2 probe sends **4 callbacks** (`in_progress` + `completed` x2).
