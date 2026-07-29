@@ -155,8 +155,12 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 |----------|-------|---------|------------------|
 | [`crcr-dispatch-receiver.yml`](.github/workflows/crcr-dispatch-receiver.yml) | L1 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or landed & unlabeled), `push` | Dispatch payload, checkout SHA, `delivery_id`; HUD callbacks on every PR event it runs |
 | [`crcr-l2-ci.yml`](.github/workflows/crcr-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or landed & unlabeled) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
-| [`oot-l3-ci.yml`](.github/workflows/oot-l3-ci.yml) | L3 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or landed & unlabeled) | Relay handling of success/failure/cancel/timeout and matrix (per-job) check runs |
+| [`crcr-l3-ci.yml`](.github/workflows/crcr-l3-ci.yml) | L3 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or landed & unlabeled) | Relay handling of success/failure/cancel/timeout and matrix (per-job) check runs |
 | [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Offline | push/PR to this repo only | Validator unit tests against JSON fixtures (guards test code, not live CRCR) |
+
+### Job naming convention
+
+Jobs prefixed `x` (`xfail`, `xcancel`, `xtimeout`) intentionally end in a non-success state to test the relay's handling of that outcome and the corresponding non-success check runs created in the PRs; a red check there is expected, not a bug.
 
 ### Event filtering (labeled / landed PRs, relay rate limits)
 

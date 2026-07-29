@@ -1,4 +1,4 @@
-name: OOT L3 CI
+name: CRCR L3 CI - Checking if PR check run is successfully created
 
 on:
   repository_dispatch:
@@ -6,13 +6,13 @@ on:
       - pull_request
 
 run-name: >-
-  OOT L3 -
+  CRCR L3 -
   PR #${{ github.event.client_payload.payload.pull_request.number }}
   (${{ github.event.client_payload.payload.action }})
 
 concurrency:
   group: >-
-    oot-l3-${{ github.event.client_payload.payload.repository.full_name }}-${{
+    crcr-l3-${{ github.event.client_payload.payload.repository.full_name }}-${{
     github.event.client_payload.payload.pull_request.number || github.run_id }}
   cancel-in-progress: true
 
@@ -35,7 +35,7 @@ jobs:
       - run: echo "PR closed — older runs cancelled by the concurrency group"
 
   # Reports completed/success.
-  test-success:
+  test-L3-success-checkrun-creation:
     # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
     # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
     # PR already ran pre-merge. A PR is "landed" when closed with GitHub
@@ -65,7 +65,7 @@ jobs:
 
   # Real failure: a step exits non-zero, so the job actually fails and the
   # completed callback reports the real job.status (= failure).
-  test-failure:
+  test-L3-xfail-checkrun-creation:
     # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
     # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
     # PR already ran pre-merge. A PR is "landed" when closed with GitHub
@@ -98,7 +98,7 @@ jobs:
   # Real cancel: the job exceeds its timeout-minutes, so GitHub cancels THIS job
   # only (siblings keep running, unlike cancelling the whole run). The always()
   # callback still fires during cancellation and reports the real job.status.
-  test-cancel:
+  test-L3-xcancel-checkrun-creation:
     # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
     # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
     # PR already ran pre-merge. A PR is "landed" when closed with GitHub
@@ -129,7 +129,7 @@ jobs:
 
   # Real timeout: reports in_progress but never reports completed, so the relay's
   # zombie sweeper times it out after ZOMBIE_TIMEOUT_SECONDS (not a faked conclusion).
-  test-timeout:
+  test-L3-xtimeout-checkrun-creation:
     # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
     # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
     # PR already ran pre-merge. A PR is "landed" when closed with GitHub
@@ -154,7 +154,7 @@ jobs:
 
   # Matrix: each leg gets its own check run via a matrix-scoped job-name.
   # Also tests that the relay can handle concurrent jobs.
-  test-matrix:
+  test-L3-matrix-checkrun-creation:
     # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
     # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
     # PR already ran pre-merge. A PR is "landed" when closed with GitHub
@@ -179,11 +179,11 @@ jobs:
       - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
         with:
           status: in_progress
-          job-name: test-matrix-${{ matrix.variant }}
+          job-name: test-L3-matrix-checkrun-creation-${{ matrix.variant }}
       - run: sleep 15
       - if: always()
         uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
         with:
           status: completed
           conclusion: success
-          job-name: test-matrix-${{ matrix.variant }}
+          job-name: test-L3-matrix-checkrun-creation-${{ matrix.variant }}
