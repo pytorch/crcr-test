@@ -1,4 +1,4 @@
-name: PyTorch Out-of-Tree Dispatch
+name: CRCR L1 Dispatch Receiver
 
 on:
   repository_dispatch:
