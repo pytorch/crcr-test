@@ -10,6 +10,10 @@ on:
         required: false
         default: ""
 
+concurrency:
+  group: crcr-nightly-health
+  cancel-in-progress: false
+
 run-name: >-
   Nightly Health -
   ${{ github.event_name == 'schedule' && 'cron' || 'manual' }}${{ inputs.sha && format(' ({0})', inputs.sha) || '' }}
@@ -97,9 +101,8 @@ jobs:
           event-type: nightly
           job-name: test-nightly-multi-job-callback-${{ matrix.variant }}
 
-  test-nightly-failure-callback:
-    name: "test-nightly-failure-callback"
-    if: github.event_name == 'workflow_dispatch'
+  xfail-nightly-callback:
+    name: "xfail-nightly-callback"
     needs: [resolve-sha, test-nightly-multi-job-callback]
     runs-on: ubuntu-latest
     steps:
@@ -115,14 +118,13 @@ jobs:
         with:
           status: completed
           conclusion: failure
-          delivery-id: ${{ needs.resolve-sha.outputs.sha }}-probe-negative
+          delivery-id: ${{ needs.resolve-sha.outputs.sha }}
           event-type: nightly
-          job-name: test-nightly-failure-callback
+          job-name: xfail-nightly-callback
 
-  test-nightly-cancelled-callback:
-    name: "test-nightly-cancelled-callback"
-    if: github.event_name == 'workflow_dispatch'
-    needs: [resolve-sha, test-nightly-failure-callback]
+  xcancel-nightly-callback:
+    name: "xcancel-nightly-callback"
+    needs: [resolve-sha, xfail-nightly-callback]
     runs-on: ubuntu-latest
     steps:
       - name: Simulate cancelled nightly job
@@ -137,14 +139,13 @@ jobs:
         with:
           status: completed
           conclusion: cancelled
-          delivery-id: ${{ needs.resolve-sha.outputs.sha }}-probe-negative
+          delivery-id: ${{ needs.resolve-sha.outputs.sha }}
           event-type: nightly
-          job-name: test-nightly-cancelled-callback
+          job-name: xcancel-nightly-callback
 
-  test-nightly-reject-in-progress:
-    name: "test-nightly-reject-in-progress"
-    if: github.event_name == 'workflow_dispatch'
-    needs: [resolve-sha, test-nightly-cancelled-callback]
+  xreject-nightly-in-progress:
+    name: "xreject-nightly-in-progress"
+    needs: [resolve-sha, xcancel-nightly-callback]
     runs-on: ubuntu-latest
     steps:
       - name: Mint OIDC token
@@ -161,7 +162,7 @@ jobs:
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
           CALLBACK_URL: https://gwuj7w5coh4y4l66urspge6mnm0pwaxq.lambda-url.us-east-1.on.aws/github/callback/
-          DELIVERY_ID: ${{ needs.resolve-sha.outputs.sha }}-probe-negative
+          DELIVERY_ID: ${{ needs.resolve-sha.outputs.sha }}
         run: |
           PAYLOAD=$(cat <<EOF
           {
@@ -178,7 +179,7 @@ jobs:
               "name": "CRCR Nightly Health",
               "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
               "run_attempt": "${{ github.run_attempt }}",
-              "job_name": "test-nightly-reject-in-progress",
+              "job_name": "xreject-nightly-in-progress",
               "check_run_id": "${{ github.run_id }}-${{ github.run_attempt }}",
               "run_id": "${{ github.run_id }}",
               "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
@@ -217,9 +218,9 @@ jobs:
       - resolve-sha
       - test-nightly-success-callback
       - test-nightly-multi-job-callback
-      - test-nightly-failure-callback
-      - test-nightly-cancelled-callback
-      - test-nightly-reject-in-progress
+      - xfail-nightly-callback
+      - xcancel-nightly-callback
+      - xreject-nightly-in-progress
     if: always()
     runs-on: ubuntu-latest
     steps:
@@ -228,10 +229,9 @@ jobs:
           SHA: ${{ needs.resolve-sha.outputs.sha }}
           SUCCESS_RESULT: ${{ needs.test-nightly-success-callback.result }}
           MULTI_JOB_RESULT: ${{ needs.test-nightly-multi-job-callback.result }}
-          FAILURE_RESULT: ${{ needs.test-nightly-failure-callback.result }}
-          CANCELLED_RESULT: ${{ needs.test-nightly-cancelled-callback.result }}
-          REJECTION_RESULT: ${{ needs.test-nightly-reject-in-progress.result }}
-          IS_MANUAL: ${{ github.event_name == 'workflow_dispatch' }}
+          XFAIL_RESULT: ${{ needs.xfail-nightly-callback.result }}
+          XCANCEL_RESULT: ${{ needs.xcancel-nightly-callback.result }}
+          XREJECT_RESULT: ${{ needs.xreject-nightly-in-progress.result }}
         run: |
           echo "## CRCR Nightly Health Check" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
@@ -246,11 +246,9 @@ jobs:
           echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
           echo "| Success callback | ${SUCCESS_RESULT} |" >> $GITHUB_STEP_SUMMARY
           echo "| Multi-job callback (matrix) | ${MULTI_JOB_RESULT} |" >> $GITHUB_STEP_SUMMARY
-          if [ "$IS_MANUAL" = "true" ]; then
-            echo "| Failure callback (manual only) | ${FAILURE_RESULT} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Cancelled callback (manual only) | ${CANCELLED_RESULT} |" >> $GITHUB_STEP_SUMMARY
-            echo "| Rejection of in_progress (manual only) | ${REJECTION_RESULT} |" >> $GITHUB_STEP_SUMMARY
-          fi
+          echo "| xfail callback (expected failure) | ${XFAIL_RESULT} |" >> $GITHUB_STEP_SUMMARY
+          echo "| xcancel callback (expected cancel) | ${XCANCEL_RESULT} |" >> $GITHUB_STEP_SUMMARY
+          echo "| xreject in_progress (expected 400) | ${XREJECT_RESULT} |" >> $GITHUB_STEP_SUMMARY
           echo "" >> $GITHUB_STEP_SUMMARY
           echo "HUD: [crcr-test nightly](https://hud.pytorch.org/crcr/pytorch/crcr-test)" >> $GITHUB_STEP_SUMMARY
 
@@ -258,18 +256,13 @@ jobs:
         env:
           SUCCESS_RESULT: ${{ needs.test-nightly-success-callback.result }}
           MULTI_JOB_RESULT: ${{ needs.test-nightly-multi-job-callback.result }}
-          FAILURE_RESULT: ${{ needs.test-nightly-failure-callback.result }}
-          CANCELLED_RESULT: ${{ needs.test-nightly-cancelled-callback.result }}
-          REJECTION_RESULT: ${{ needs.test-nightly-reject-in-progress.result }}
+          XFAIL_RESULT: ${{ needs.xfail-nightly-callback.result }}
+          XCANCEL_RESULT: ${{ needs.xcancel-nightly-callback.result }}
+          XREJECT_RESULT: ${{ needs.xreject-nightly-in-progress.result }}
         run: |
           FAILED=0
-          for result in "$SUCCESS_RESULT" "$MULTI_JOB_RESULT"; do
+          for result in "$SUCCESS_RESULT" "$MULTI_JOB_RESULT" "$XFAIL_RESULT" "$XCANCEL_RESULT" "$XREJECT_RESULT"; do
             if [ "$result" != "success" ]; then
-              FAILED=1
-            fi
-          done
-          for result in "$FAILURE_RESULT" "$CANCELLED_RESULT" "$REJECTION_RESULT"; do
-            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
               FAILED=1
             fi
           done
