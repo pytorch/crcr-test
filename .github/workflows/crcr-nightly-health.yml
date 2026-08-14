@@ -4,10 +4,15 @@ on:
   schedule:
     - cron: "30 8 * * *"  # daily at 08:30 UTC (30 min after pytorch/pytorch nightly branch update)
   workflow_dispatch:
+    inputs:
+      sha:
+        description: "pytorch/pytorch SHA to use as delivery-id (leave empty for latest main HEAD)"
+        required: false
+        default: ""
 
 run-name: >-
   Nightly Health -
-  ${{ github.event_name == 'schedule' && 'cron' || 'manual' }}
+  ${{ github.event_name == 'schedule' && 'cron' || 'manual' }}${{ inputs.sha && format(' ({0})', inputs.sha) || '' }}
 
 permissions:
   contents: read
@@ -20,17 +25,24 @@ jobs:
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
     steps:
-      - name: Fetch latest pytorch/pytorch main HEAD SHA
+      - name: Resolve pytorch/pytorch SHA
         id: sha
+        env:
+          INPUT_SHA: ${{ inputs.sha }}
         run: |
-          SHA=$(curl -fsSL "https://api.github.com/repos/pytorch/pytorch/commits?sha=main&per_page=1" \
-            | jq -r '.[0].sha')
-          if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
-            echo "::error::Could not resolve pytorch/pytorch main HEAD"
-            exit 1
+          if [ -n "$INPUT_SHA" ]; then
+            echo "Using manually provided SHA: $INPUT_SHA"
+            SHA="$INPUT_SHA"
+          else
+            SHA=$(curl -fsSL "https://api.github.com/repos/pytorch/pytorch/commits?sha=main&per_page=1" \
+              | jq -r '.[0].sha')
+            if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
+              echo "::error::Could not resolve pytorch/pytorch main HEAD"
+              exit 1
+            fi
+            echo "Resolved pytorch/pytorch main HEAD: $SHA"
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
-          echo "Resolved pytorch/pytorch main HEAD: $SHA"
 
   test-nightly-success-callback:
     name: "test-nightly-success-callback"
