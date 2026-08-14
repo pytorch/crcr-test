@@ -82,7 +82,7 @@ jobs:
         with:
           status: completed
           conclusion: failure
-          delivery-id: ${{ needs.resolve-sha.outputs.sha }}
+          delivery-id: ${{ needs.resolve-sha.outputs.sha }}-probe-negative
           event-type: nightly
           job-name: test-nightly-failure-callback
 
@@ -103,7 +103,7 @@ jobs:
         with:
           status: completed
           conclusion: cancelled
-          delivery-id: ${{ needs.resolve-sha.outputs.sha }}
+          delivery-id: ${{ needs.resolve-sha.outputs.sha }}-probe-negative
           event-type: nightly
           job-name: test-nightly-cancelled-callback
 
@@ -151,7 +151,7 @@ jobs:
         env:
           OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
           CALLBACK_URL: https://gwuj7w5coh4y4l66urspge6mnm0pwaxq.lambda-url.us-east-1.on.aws/github/callback/
-          DELIVERY_ID: ${{ needs.resolve-sha.outputs.sha }}
+          DELIVERY_ID: ${{ needs.resolve-sha.outputs.sha }}-probe-negative
         run: |
           PAYLOAD=$(cat <<EOF
           {
