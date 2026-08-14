@@ -1,0 +1,250 @@
+name: CRCR Nightly Health
+
+on:
+  schedule:
+    - cron: "30 8 * * *"  # daily at 08:30 UTC (30 min after pytorch/pytorch nightly branch update)
+  workflow_dispatch:
+
+run-name: >-
+  Nightly Health -
+  ${{ github.event_name == 'schedule' && 'cron' || 'manual' }}
+
+permissions:
+  contents: read
+  id-token: write
+
+jobs:
+  resolve-sha:
+    name: "resolve-sha"
+    runs-on: ubuntu-latest
+    outputs:
+      sha: ${{ steps.sha.outputs.sha }}
+    steps:
+      - name: Fetch latest pytorch/pytorch main HEAD SHA
+        id: sha
+        run: |
+          SHA=$(curl -fsSL "https://api.github.com/repos/pytorch/pytorch/commits?sha=main&per_page=1" \
+            | jq -r '.[0].sha')
+          if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
+            echo "::error::Could not resolve pytorch/pytorch main HEAD"
+            exit 1
+          fi
+          echo "sha=$SHA" >> "$GITHUB_OUTPUT"
+          echo "Resolved pytorch/pytorch main HEAD: $SHA"
+
+  test-nightly-success-callback:
+    name: "test-nightly-success-callback"
+    needs: resolve-sha
+    runs-on: ubuntu-latest
+    steps:
+      - name: Simulate successful nightly job
+        run: |
+          echo "Simulating a successful nightly build/test..."
+          sleep 5
+          echo "Done."
+
+      - name: Report success to CRCR
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          delivery-id: ${{ needs.resolve-sha.outputs.sha }}
+          event-type: nightly
+          job-name: test-nightly-success-callback
+
+  test-nightly-failure-callback:
+    name: "test-nightly-failure-callback"
+    needs: [resolve-sha, test-nightly-success-callback]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Simulate failed nightly job
+        run: |
+          echo "Simulating a failed nightly test run..."
+          sleep 5
+          echo "Done (reporting failure conclusion, job itself succeeds)."
+
+      - name: Report failure to CRCR
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: failure
+          delivery-id: ${{ needs.resolve-sha.outputs.sha }}
+          event-type: nightly
+          job-name: test-nightly-failure-callback
+
+  test-nightly-cancelled-callback:
+    name: "test-nightly-cancelled-callback"
+    needs: [resolve-sha, test-nightly-failure-callback]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Simulate cancelled nightly job
+        run: |
+          echo "Simulating a cancelled nightly run..."
+          sleep 5
+          echo "Done (reporting cancelled conclusion)."
+
+      - name: Report cancelled to CRCR
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: cancelled
+          delivery-id: ${{ needs.resolve-sha.outputs.sha }}
+          event-type: nightly
+          job-name: test-nightly-cancelled-callback
+
+  test-nightly-multi-job-callback:
+    name: "test-nightly-multi-job-callback (${{ matrix.variant }})"
+    needs: [resolve-sha, test-nightly-cancelled-callback]
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [cpu, gpu, inductor]
+    steps:
+      - name: Simulate nightly variant
+        run: |
+          echo "Simulating nightly test variant: ${{ matrix.variant }}"
+          sleep 5
+          echo "Done."
+
+      - name: Report to CRCR
+        if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          delivery-id: ${{ needs.resolve-sha.outputs.sha }}
+          event-type: nightly
+          job-name: test-nightly-multi-job-callback-${{ matrix.variant }}
+
+  test-nightly-reject-in-progress:
+    name: "test-nightly-reject-in-progress"
+    needs: [resolve-sha, test-nightly-multi-job-callback]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Mint OIDC token
+        id: oidc
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken("pytorch-cross-repo-ci-relay");
+            core.setSecret(token);
+            core.setOutput('token', token);
+
+      - name: Attempt invalid nightly callback (status=in_progress should be rejected)
+        id: rejection_test
+        env:
+          OIDC_TOKEN: ${{ steps.oidc.outputs.token }}
+          CALLBACK_URL: https://gwuj7w5coh4y4l66urspge6mnm0pwaxq.lambda-url.us-east-1.on.aws/github/callback/
+          DELIVERY_ID: ${{ needs.resolve-sha.outputs.sha }}
+        run: |
+          PAYLOAD=$(cat <<EOF
+          {
+            "event_type": "nightly",
+            "delivery_id": "${DELIVERY_ID}",
+            "payload": {
+              "repository": {"full_name": "pytorch/pytorch"},
+              "head_sha": "${DELIVERY_ID}"
+            },
+            "workflow": {
+              "schema_version": "1",
+              "status": "in_progress",
+              "conclusion": null,
+              "name": "CRCR Nightly Health",
+              "url": "${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}",
+              "run_attempt": "${{ github.run_attempt }}",
+              "job_name": "test-nightly-reject-in-progress",
+              "check_run_id": "${{ github.run_id }}-${{ github.run_attempt }}",
+              "run_id": "${{ github.run_id }}",
+              "started_at": "$(date -u +%Y-%m-%dT%H:%M:%SZ)",
+              "completed_at": null
+            }
+          }
+          EOF
+          )
+
+          HTTP_CODE=$(curl --silent --show-error \
+            --output /tmp/rejection_response.json \
+            --write-out "%{http_code}" \
+            -X POST \
+            --max-time 10 \
+            -H "Content-Type: application/json" \
+            -H "Authorization: Bearer ${OIDC_TOKEN}" \
+            --data "$PAYLOAD" \
+            "${CALLBACK_URL}")
+
+          echo "HTTP response code: $HTTP_CODE"
+          BODY=$(cat /tmp/rejection_response.json 2>/dev/null || echo "(empty)")
+          echo "Response body: $BODY"
+
+          if [ "$HTTP_CODE" = "400" ]; then
+            echo "PASS: CRCR correctly rejected in_progress for nightly event_type (HTTP 400)"
+            echo "result=pass" >> "$GITHUB_OUTPUT"
+          else
+            echo "FAIL: Expected HTTP 400, got $HTTP_CODE"
+            echo "result=fail" >> "$GITHUB_OUTPUT"
+            exit 1
+          fi
+
+  summary:
+    name: "summary"
+    needs:
+      - resolve-sha
+      - test-nightly-success-callback
+      - test-nightly-failure-callback
+      - test-nightly-cancelled-callback
+      - test-nightly-multi-job-callback
+      - test-nightly-reject-in-progress
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Nightly health summary
+        env:
+          SHA: ${{ needs.resolve-sha.outputs.sha }}
+          SUCCESS_RESULT: ${{ needs.test-nightly-success-callback.result }}
+          FAILURE_RESULT: ${{ needs.test-nightly-failure-callback.result }}
+          CANCELLED_RESULT: ${{ needs.test-nightly-cancelled-callback.result }}
+          MULTI_JOB_RESULT: ${{ needs.test-nightly-multi-job-callback.result }}
+          REJECTION_RESULT: ${{ needs.test-nightly-reject-in-progress.result }}
+        run: |
+          echo "## CRCR Nightly Health Check" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Property | Value |" >> $GITHUB_STEP_SUMMARY
+          echo "|----------|-------|" >> $GITHUB_STEP_SUMMARY
+          echo "| delivery-id (SHA) | \`${SHA:0:12}\` |" >> $GITHUB_STEP_SUMMARY
+          echo "| Trigger | ${{ github.event_name }} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "### Callback Tests" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "| Test | Result |" >> $GITHUB_STEP_SUMMARY
+          echo "|------|--------|" >> $GITHUB_STEP_SUMMARY
+          echo "| Success callback | ${SUCCESS_RESULT} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Failure callback | ${FAILURE_RESULT} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Cancelled callback | ${CANCELLED_RESULT} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Multi-job callback (matrix) | ${MULTI_JOB_RESULT} |" >> $GITHUB_STEP_SUMMARY
+          echo "| Rejection of in_progress | ${REJECTION_RESULT} |" >> $GITHUB_STEP_SUMMARY
+          echo "" >> $GITHUB_STEP_SUMMARY
+          echo "HUD: [crcr-test nightly](https://hud.pytorch.org/crcr/pytorch/crcr-test)" >> $GITHUB_STEP_SUMMARY
+
+      - name: Fail if any test failed
+        env:
+          SUCCESS_RESULT: ${{ needs.test-nightly-success-callback.result }}
+          FAILURE_RESULT: ${{ needs.test-nightly-failure-callback.result }}
+          CANCELLED_RESULT: ${{ needs.test-nightly-cancelled-callback.result }}
+          MULTI_JOB_RESULT: ${{ needs.test-nightly-multi-job-callback.result }}
+          REJECTION_RESULT: ${{ needs.test-nightly-reject-in-progress.result }}
+        run: |
+          FAILED=0
+          for result in "$SUCCESS_RESULT" "$FAILURE_RESULT" "$CANCELLED_RESULT" "$MULTI_JOB_RESULT" "$REJECTION_RESULT"; do
+            if [ "$result" != "success" ]; then
+              FAILED=1
+            fi
+          done
+          if [ "$FAILED" -eq 1 ]; then
+            echo "::error::One or more nightly health tests failed"
+            exit 1
+          fi
+          echo "All nightly health tests passed"
