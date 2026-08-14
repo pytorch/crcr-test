@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
     inputs:
       sha:
-        description: "pytorch/pytorch SHA to use as delivery-id (leave empty for latest main HEAD)"
+        description: "pytorch/pytorch SHA to use as delivery-id (leave empty for latest nightly)"
         required: false
         default: ""
 
@@ -25,7 +25,7 @@ jobs:
     outputs:
       sha: ${{ steps.sha.outputs.sha }}
     steps:
-      - name: Resolve pytorch/pytorch SHA
+      - name: Resolve pytorch/pytorch nightly SHA
         id: sha
         env:
           INPUT_SHA: ${{ inputs.sha }}
@@ -34,13 +34,20 @@ jobs:
             echo "Using manually provided SHA: $INPUT_SHA"
             SHA="$INPUT_SHA"
           else
-            SHA=$(curl -fsSL "https://api.github.com/repos/pytorch/pytorch/commits?sha=main&per_page=1" \
+            NIGHTLY_SHA=$(curl -fsSL "https://api.github.com/repos/pytorch/pytorch/commits?sha=nightly&per_page=1" \
               | jq -r '.[0].sha')
-            if [ -z "$SHA" ] || [ "$SHA" = "null" ]; then
-              echo "::error::Could not resolve pytorch/pytorch main HEAD"
+            if [ -z "$NIGHTLY_SHA" ] || [ "$NIGHTLY_SHA" = "null" ]; then
+              echo "::error::Could not resolve pytorch/pytorch nightly HEAD"
               exit 1
             fi
-            echo "Resolved pytorch/pytorch main HEAD: $SHA"
+            COMMIT_MSG=$(curl -fsSL "https://api.github.com/repos/pytorch/pytorch/commits/$NIGHTLY_SHA" \
+              | jq -r '.commit.message')
+            SHA=$(echo "$COMMIT_MSG" | grep -oP '\(([a-f0-9]{40})\)' | tr -d '()')
+            if [ -z "$SHA" ]; then
+              echo "::warning::Could not extract source SHA from nightly commit, using nightly SHA directly"
+              SHA="$NIGHTLY_SHA"
+            fi
+            echo "Resolved pytorch/pytorch nightly source SHA: $SHA"
           fi
           echo "sha=$SHA" >> "$GITHUB_OUTPUT"
 
