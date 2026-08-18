@@ -1,0 +1,128 @@
+name: CRCR L4 Blocking - Test if L4 check run is created and can block PRs from merged
+
+on:
+  repository_dispatch:
+    types:
+      - pull_request
+
+run-name: >-
+  CRCR L4 -
+  PR #${{ github.event.client_payload.payload.pull_request.number }}
+  (${{ github.event.client_payload.payload.action }})
+
+concurrency:
+  group: >-
+    crcr-l4-${{ github.event.client_payload.payload.repository.full_name }}-${{
+    github.event.client_payload.payload.pull_request.number || github.run_id }}
+  cancel-in-progress: true
+
+permissions:
+  actions: write
+  id-token: write
+
+jobs:
+  cancel-workflow:
+    if: ${{ github.event.client_payload.payload.action == 'closed' &&
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test-L4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - run: echo "PR closed — older runs cancelled by the concurrency group"
+
+  # Reports completed/success. Only runs for PRs titled "[CRCR]...".
+  test-L4-success-checkrun-creation:
+    if: >-
+      ${{ github.event.client_payload.payload.action != 'closed' &&
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test-L4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+      - run: sleep 15
+      - if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+
+  # Real failure: a step exits non-zero, so the job actually fails and the
+  # completed callback reports the real job.status (= failure).
+  test-L4-xfail-checkrun-creation:
+    if: >-
+      ${{ github.event.client_payload.payload.action != 'closed' &&
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test-L4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+      - run: |
+          sleep 15
+          exit 1
+      - if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: ${{ job.status }}
+
+  # Real cancel: the job exceeds its timeout-minutes, so GitHub cancels THIS job
+  # only (siblings keep running, unlike cancelling the whole run). The always()
+  # callback still fires during cancellation and reports the real job.status.
+  test-L4-xcancel-checkrun-creation:
+    if: >-
+      ${{ github.event.client_payload.payload.action != 'closed' &&
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test-L4') }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 1
+    steps:
+      - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+      - run: sleep 90   # exceeds timeout-minutes: 1 → GitHub cancels this job
+      - if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: ${{ job.status }}
+
+  # Real timeout: reports in_progress but never reports completed, so the relay's
+  # zombie sweeper times it out after ZOMBIE_TIMEOUT_SECONDS (not a faked conclusion).
+  test-L4-xtimeout-checkrun-creation:
+    if: >-
+      ${{ github.event.client_payload.payload.action != 'closed' &&
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test-L4') }}
+    runs-on: ubuntu-latest
+    steps:
+      - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+      - run: echo "Intentionally NOT reporting completed → relay zombie-times-it-out"
+
+  # Matrix: each leg gets its own check run via a matrix-scoped job-name.
+  test-L4-matrix-checkrun-creation:
+    if: >-
+      ${{ github.event.client_payload.payload.action != 'closed' &&
+      contains(github.event.client_payload.payload.pull_request.labels.*.name,
+      'ciflow/crcr/crcr-test-L4') }}
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        variant: [1, 2, 3]
+    steps:
+      - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: in_progress
+          job-name: test-L4-matrix-checkrun-creation-${{ matrix.variant }}
+      - run: sleep 15
+      - if: always()
+        uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+        with:
+          status: completed
+          conclusion: success
+          job-name: test-L4-matrix-checkrun-creation-${{ matrix.variant }}
