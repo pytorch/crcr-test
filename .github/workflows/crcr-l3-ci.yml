@@ -89,11 +89,50 @@ jobs:
       - run: |
           sleep 15
           exit 1
+      # Stand-in for a downstream log-triage step. A real repo would run its own
+      # analyzer over this job's logs and emit the verdict; here every value is
+      # made up (the failure above is deliberate), only the plumbing is real:
+      # the step's output is passed to the callback's `triage-verdict` input,
+      # which the relay validates and HUD shows in this job's tooltip.
+      - name: Mock triage verdict
+        id: triage
+        if: always()
+        env:
+          PR_NUMBER: ${{ github.event.client_payload.payload.pull_request.number }}
+          HEAD_SHA: ${{ github.event.client_payload.payload.pull_request.head.sha }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          verdict=$(jq -cn \
+            --argjson pr "$PR_NUMBER" \
+            --arg sha "$HEAD_SHA" \
+            --arg run_url "$RUN_URL" \
+            --arg analyzed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
+            '{
+              schema_version: 1,
+              category: "upstream",
+              confidence: "high",
+              summary: "[mock] test-L3-xfail fails on purpose (exit 1) to exercise CRCR failure reporting; this verdict is attached by the crcr-test workflow to exercise the triage-verdict path.",
+              suspected_upstream: {
+                pr: $pr,
+                commit: $sha,
+                reason: "mock: blames the PR under test"
+              },
+              evidence: [{
+                job: "test-L3-xfail-checkrun-creation",
+                log_url: $run_url,
+                excerpt: "Process completed with exit code 1."
+              }],
+              reproduced_on_retry: false,
+              analyzer: {name: "crcr-test-mock-triage", version: "0.0.1"},
+              analyzed_at: $analyzed_at
+            }')
+          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
       - if: always()
         uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
         with:
           status: completed
           conclusion: ${{ job.status }}
+          triage-verdict: ${{ steps.triage.outputs.verdict }}
 
   # Real cancel: the job exceeds its timeout-minutes, so GitHub cancels THIS job
   # only (siblings keep running, unlike cancelling the whole run). The always()
