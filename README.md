@@ -201,7 +201,7 @@ when interpreting nightly HUD data.
 
 The workflow uses a non-cancelling concurrency group so overlapping scheduled
 and manual runs do not report the same probe sequence concurrently. Use the
-workflow summary and the [crcr-test HUD page](https://hud.pytorch.org/crcr/pytorch/crcr-test)
+workflow summary and the [crcr-test HUD page](https://hud.pytorch.org/crcr/pytorch/crcr-test?event=nightly)
 to inspect a run after it completes.
 
 ### Job naming convention
