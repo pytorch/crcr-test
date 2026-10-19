@@ -149,7 +149,7 @@ Once Steps 1–3 are complete, your workflow will start receiving dispatches. Yo
 
 This repository is a **downstream CRCR health probe**. It contains no CRCR implementation code — only workflows and validators that run when the relay sends a live `repository_dispatch` event.
 
-**There is no scheduled cron.** All CRCR health checks run in real time, triggered by upstream PyTorch activity (PR open/sync/close or push/tag events). Each run writes a structured `health-report.json` artifact you can use for metrics.
+Most CRCR health checks run in real time, triggered by upstream PyTorch activity (PR open/sync/close or push/tag events). The separate nightly health workflow is self-scheduled: it resolves the current `pytorch/pytorch` `nightly` revision and reports completed-only nightly results. Each dispatch-driven probe run writes a structured `health-report.json` artifact you can use for metrics.
 
 | Workflow | Level | Trigger | What it verifies |
 |----------|-------|---------|------------------|
@@ -157,7 +157,52 @@ This repository is a **downstream CRCR health probe**. It contains no CRCR imple
 | [`crcr-l2-ci.yml`](.github/workflows/crcr-l2-ci.yml) | L2 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or landed & unlabeled) | L1 checks + smoke + `in_progress`/`completed` callbacks, HUD metrics |
 | [`crcr-l3-ci.yml`](.github/workflows/crcr-l3-ci.yml) | L3 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test`-labeled, or landed & unlabeled) | Relay handling of success/failure/cancel/timeout and matrix (per-job) check runs |
 | [`crcr-l4-ci.yml`](.github/workflows/crcr-l4-ci.yml) | L4 | live `repository_dispatch`: `pull_request` (`ciflow/crcr/crcr-test-L4`-labeled) | Blocking check-run creation for success/failure/cancel/timeout and matrix (per-job) scenarios |
+| [`crcr-nightly-health.yml`](.github/workflows/crcr-nightly-health.yml) | Nightly | daily schedule or manual dispatch | Resolves the PyTorch nightly source revision; exercises completed-only nightly callbacks, matrix job identity, and expected terminal-state validation |
 | [`crcr-unit-tests.yml`](.github/workflows/crcr-unit-tests.yml) | Offline | push/PR to this repo only | Validator unit tests against JSON fixtures (guards test code, not live CRCR) |
+
+### Nightly health checks
+
+Nightly CI is a **self-reported periodic compatibility signal**, not a
+`repository_dispatch` response and not a PR check-run lifecycle. The
+[`crcr-nightly-health.yml`](.github/workflows/crcr-nightly-health.yml) workflow
+runs every day at `08:30` UTC and can also be started manually. GitHub Actions
+scheduled workflows are best-effort and may start late; the workflow resolves
+the `pytorch/pytorch` `nightly` branch when it actually begins.
+
+The workflow queries the `nightly` branch head and attempts to extract the
+upstream source SHA from its commit message. If the source SHA is unavailable,
+it uses the nightly branch SHA itself. That value is sent as the `delivery-id`,
+which groups all results for one nightly validation run in the HUD. A manual
+run accepts an optional `sha` input for a known revision; the workflow passes
+that value through as the delivery ID and does not independently validate that
+the SHA exists.
+
+Nightly callbacks use `event-type: nightly` and **must be terminal**:
+`status: completed` with a conclusion. They do not send `in_progress`, do not
+create a GitHub PR check run, and are shown as nightly data rather than as
+pull-request data. This is deliberate: a nightly is an asynchronous canary for
+the current upstream revision, whereas a PR callback represents a particular
+developer workflow.
+
+| Probe | What it demonstrates |
+|-------|----------------------|
+| `test-nightly-success-callback` | A normal completed `success` nightly result is accepted. |
+| `test-nightly-multi-job-callback` | Matrix variants use distinct job names while sharing one nightly `delivery-id`. |
+| `xfail-nightly-callback` | A completed `failure` conclusion can be recorded as an expected contract probe. |
+| `xcancel-nightly-callback` | A completed `cancelled` conclusion can be recorded as an expected contract probe. |
+| `xreject-nightly-in-progress` | An invalid nightly `in_progress` payload is rejected with HTTP `400`. |
+
+The `xfail` and `xcancel` names identify intentional non-success contract
+probes. Their callback conclusions are not evidence of a real nightly product
+failure; the workflow succeeds only when the relay handles the expected
+outcome. Likewise, the `xreject` probe succeeds only when the relay rejects
+the invalid state. Keep these probes distinct from normal backend test jobs
+when interpreting nightly HUD data.
+
+The workflow uses a non-cancelling concurrency group so overlapping scheduled
+and manual runs do not report the same probe sequence concurrently. Use the
+workflow summary and the [crcr-test HUD page](https://hud.pytorch.org/crcr/pytorch/crcr-test)
+to inspect a run after it completes.
 
 ### Job naming convention
 
