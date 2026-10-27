@@ -239,7 +239,7 @@ Coverage by event, for the PRs that run:
 |-------|-----------|
 | PyTorch PR `opened`/`reopened`/`synchronize`, **`ciflow/crcr/crcr-test` labeled** | L1 + L2 + L3 full (HUD callbacks) |
 | PyTorch PR `opened`/`reopened`/`synchronize`, **unlabeled** | Nothing (skipped) |
-| PyTorch PR `closed` **+ landed, was not labeled** | L1 + L2 + L3 full (HUD callbacks) |
+| PyTorch PR `closed` **+ landed, was not labeled** | L1 + L2 full (HUD callbacks); L3 skipped |
 | PyTorch PR `closed` **+ landed, was labeled** | Nothing (already ran pre-merge) |
 | PyTorch PR `closed` **not landed** (abandoned) | L1/L2/L3 cancel jobs only (build jobs skipped) |
 | PyTorch push / ciflow tag (create or update) | L1 light only (no callbacks) |
