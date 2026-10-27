@@ -22,8 +22,8 @@ permissions:
 
 jobs:
   # Cleanup for abandoned PRs only (closed but not landed). Landed PRs — GitHub
-  # merged==true OR the pytorch merge-bot "Merged" label — fall through to the
-  # CI jobs below instead of being treated as a plain close.
+  # merged==true OR the pytorch merge-bot "Merged" label — run nothing in L3:
+  # no cancel job and no CI jobs below (they already ran pre-merge if labeled).
   cancel-workflow:
     if: >-
       github.event.client_payload.payload.action == 'closed' &&
@@ -36,21 +36,12 @@ jobs:
 
   # Reports completed/success.
   test-L3-success-checkrun-creation:
-    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
-    # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
-    # PR already ran pre-merge. A PR is "landed" when closed with GitHub
-    # merged==true OR the pytorch merge-bot "Merged" label (ghstack/co-dev PRs
-    # close with merged==false, so the label is the reliable signal).
+    # Opt-in pre-merge testing only: run when the PyTorch PR carries the
+    # ciflow/crcr/crcr-test label. Closed PRs (merged or not) never run L3 CI.
     if: >-
-      (github.event.client_payload.payload.action != 'closed' &&
+      github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test')) ||
-      (github.event.client_payload.payload.action == 'closed' &&
-      (github.event.client_payload.payload.pull_request.merged == true ||
-      contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'Merged')) &&
-      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test'))
+      'ciflow/crcr/crcr-test')
     runs-on: ubuntu-latest
     steps:
       - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
@@ -66,21 +57,12 @@ jobs:
   # Real failure: a step exits non-zero, so the job actually fails and the
   # completed callback reports the real job.status (= failure).
   test-L3-xfail-checkrun-creation:
-    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
-    # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
-    # PR already ran pre-merge. A PR is "landed" when closed with GitHub
-    # merged==true OR the pytorch merge-bot "Merged" label (ghstack/co-dev PRs
-    # close with merged==false, so the label is the reliable signal).
+    # Opt-in pre-merge testing only: run when the PyTorch PR carries the
+    # ciflow/crcr/crcr-test label. Closed PRs (merged or not) never run L3 CI.
     if: >-
-      (github.event.client_payload.payload.action != 'closed' &&
+      github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test')) ||
-      (github.event.client_payload.payload.action == 'closed' &&
-      (github.event.client_payload.payload.pull_request.merged == true ||
-      contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'Merged')) &&
-      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test'))
+      'ciflow/crcr/crcr-test')
     runs-on: ubuntu-latest
     steps:
       - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
@@ -138,21 +120,12 @@ jobs:
   # only (siblings keep running, unlike cancelling the whole run). The always()
   # callback still fires during cancellation and reports the real job.status.
   test-L3-xcancel-checkrun-creation:
-    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
-    # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
-    # PR already ran pre-merge. A PR is "landed" when closed with GitHub
-    # merged==true OR the pytorch merge-bot "Merged" label (ghstack/co-dev PRs
-    # close with merged==false, so the label is the reliable signal).
+    # Opt-in pre-merge testing only: run when the PyTorch PR carries the
+    # ciflow/crcr/crcr-test label. Closed PRs (merged or not) never run L3 CI.
     if: >-
-      (github.event.client_payload.payload.action != 'closed' &&
+      github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test')) ||
-      (github.event.client_payload.payload.action == 'closed' &&
-      (github.event.client_payload.payload.pull_request.merged == true ||
-      contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'Merged')) &&
-      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test'))
+      'ciflow/crcr/crcr-test')
     runs-on: ubuntu-latest
     timeout-minutes: 1
     steps:
@@ -169,21 +142,12 @@ jobs:
   # Real timeout: reports in_progress but never reports completed, so the relay's
   # zombie sweeper times it out after ZOMBIE_TIMEOUT_SECONDS (not a faked conclusion).
   test-L3-xtimeout-checkrun-creation:
-    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
-    # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
-    # PR already ran pre-merge. A PR is "landed" when closed with GitHub
-    # merged==true OR the pytorch merge-bot "Merged" label (ghstack/co-dev PRs
-    # close with merged==false, so the label is the reliable signal).
+    # Opt-in pre-merge testing only: run when the PyTorch PR carries the
+    # ciflow/crcr/crcr-test label. Closed PRs (merged or not) never run L3 CI.
     if: >-
-      (github.event.client_payload.payload.action != 'closed' &&
+      github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test')) ||
-      (github.event.client_payload.payload.action == 'closed' &&
-      (github.event.client_payload.payload.pull_request.merged == true ||
-      contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'Merged')) &&
-      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test'))
+      'ciflow/crcr/crcr-test')
     runs-on: ubuntu-latest
     steps:
       - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
@@ -194,21 +158,12 @@ jobs:
   # Matrix: each leg gets its own check run via a matrix-scoped job-name.
   # Also tests that the relay can handle concurrent jobs.
   test-L3-matrix-checkrun-creation:
-    # Run when the PyTorch PR carries the ciflow/crcr/crcr-test label (opt-in
-    # pre-merge testing), or post-merge ONLY when it was not labeled — a labeled
-    # PR already ran pre-merge. A PR is "landed" when closed with GitHub
-    # merged==true OR the pytorch merge-bot "Merged" label (ghstack/co-dev PRs
-    # close with merged==false, so the label is the reliable signal).
+    # Opt-in pre-merge testing only: run when the PyTorch PR carries the
+    # ciflow/crcr/crcr-test label. Closed PRs (merged or not) never run L3 CI.
     if: >-
-      (github.event.client_payload.payload.action != 'closed' &&
+      github.event.client_payload.payload.action != 'closed' &&
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test')) ||
-      (github.event.client_payload.payload.action == 'closed' &&
-      (github.event.client_payload.payload.pull_request.merged == true ||
-      contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'Merged')) &&
-      !contains(github.event.client_payload.payload.pull_request.labels.*.name,
-      'ciflow/crcr/crcr-test'))
+      'ciflow/crcr/crcr-test')
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
