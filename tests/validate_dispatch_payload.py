@@ -1,4 +1,8 @@
 #!/usr/bin/env python3
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
 """Validate CRCR repository_dispatch client_payload structure (L1 integration)."""
 
 from __future__ import annotations

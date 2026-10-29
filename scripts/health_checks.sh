@@ -1,4 +1,8 @@
 #!/usr/bin/env bash
+# Copyright (c) Meta Platforms, Inc. and affiliates.
+#
+# This source code is licensed under the BSD-style license found in the
+# LICENSE file in the root directory of this source tree.
 # Emit --check name=outcome pairs (one per line) for write_health_report.py.
 # Usage: mapfile -t ARGS < <(scripts/health_checks.sh SPEC)
 #        python3 tests/write_health_report.py "${ARGS[@]}" ...
