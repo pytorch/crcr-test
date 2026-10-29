@@ -401,3 +401,7 @@ For questions about onboarding, installation approval, or promotion to higher tr
 - **[@jewelkm89](https://github.com/jewelkm89)**
 - **[@subinz1](https://github.com/subinz1)**
 - **[@fffrog](https://github.com/fffrog)**
+
+## License
+
+crcr-test is BSD 3-Clause licensed, as found in the [LICENSE](LICENSE) file.
