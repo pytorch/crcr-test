@@ -204,6 +204,29 @@ and manual runs do not report the same probe sequence concurrently. Use the
 workflow summary and the [crcr-test HUD page](https://hud.pytorch.org/crcr/pytorch/crcr-test?event=nightly)
 to inspect a run after it completes.
 
+#### Failure triage
+
+A job that really fails can analyze its own failure **before it reports**: the [`triage-verdict`](.github/actions/triage-verdict/action.yml) action runs the [`crcr-test-failure-triage`](.claude/skills/crcr-test-failure-triage/SKILL.md) skill, and the job sends the resulting verdict in its own completed callback (`triage-verdict`), so it shows in that job's tooltip on the HUD. The model only runs when the job failed; if the analysis cannot run or produces nothing, the job reports its result without a verdict.
+
+Two jobs use it today: `xfail-nightly-callback` and `test-L3-xfail-checkrun-creation`. Both fail a step on purpose; the nightly one marks that step `continue-on-error`, so the job itself stays green and reports `failure` through the callback, as before. The other jobs are simple probes.
+
+**Using it in another job** (for example a failing L3 or L4 job). The job must check out the repository first (the skill and its schema are read from the checkout), have the permissions `actions: read` and `id-token: write`, and write the output of the work that can fail to a file. Then add one step between that work and the callback:
+
+```yaml
+- run: ./work.sh 2>&1 | tee "${RUNNER_TEMP}/work.log"   # the work that can fail
+- id: triage
+  if: failure()
+  uses: ./.github/actions/triage-verdict
+  with:
+    log-file: ${{ runner.temp }}/work.log
+- if: always()
+  uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
+  with:
+    status: completed
+    conclusion: ${{ job.status }}
+    triage-verdict: ${{ steps.triage.outputs.verdict }}
+```
+
 ### Job naming convention
 
 Jobs prefixed `x` (`xfail`, `xcancel`, `xtimeout`) intentionally end in a non-success state to test the relay's handling of that outcome and the corresponding non-success check runs created in the PRs; a red check there is expected, not a bug.
