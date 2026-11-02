@@ -213,7 +213,9 @@ Two jobs use it today: `xfail-nightly-callback` and `test-L3-xfail-checkrun-crea
 **Using it in another job** (for example a failing L3 or L4 job). The job must check out the repository first (the skill and its schema are read from the checkout), have the permissions `actions: read` and `id-token: write`, and write the output of the work that can fail to a file. Then add one step between that work and the callback:
 
 ```yaml
-- run: ./work.sh 2>&1 | tee "${RUNNER_TEMP}/work.log"   # the work that can fail
+- run: |   # the work that can fail
+    set -o pipefail   # without it the pipeline returns tee's status, so a failure goes unseen
+    ./work.sh 2>&1 | tee "${RUNNER_TEMP}/work.log"
 - id: triage
   if: failure()
   uses: ./.github/actions/triage-verdict
