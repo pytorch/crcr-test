@@ -110,6 +110,7 @@ runs:
         # Our own token, so the action does not depend on the Claude GitHub App being
         # installed on this repository.
         github_token: ${{ github.token }}
+        allowed_bots: pytorch-fdn-cross-repo-ci-relay
         claude_args: >-
           --model ${{ inputs.model }}
           --effort ${{ inputs.effort }}
