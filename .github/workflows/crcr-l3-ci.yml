@@ -64,51 +64,30 @@ jobs:
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
       'ciflow/crcr/crcr-test')
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read   # this run's job list, for the skill's input
+      id-token: write # Bedrock, and the callback's own token
     steps:
+      - uses: actions/checkout@v4
       - uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
         with:
           status: in_progress
-      - run: |
-          sleep 15
-          exit 1
-      # Stand-in for a downstream log-triage step. A real repo would run its own
-      # analyzer over this job's logs and emit the verdict; here every value is
-      # made up (the failure above is deliberate), only the plumbing is real:
-      # the step's output is passed to the callback's `triage-verdict` input,
-      # which the relay validates and HUD shows in this job's tooltip.
-      - name: Mock triage verdict
-        id: triage
-        if: always()
-        env:
-          PR_NUMBER: ${{ github.event.client_payload.payload.pull_request.number }}
-          HEAD_SHA: ${{ github.event.client_payload.payload.pull_request.head.sha }}
-          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+      - name: Fail on purpose
         run: |
-          verdict=$(jq -cn \
-            --argjson pr "$PR_NUMBER" \
-            --arg sha "$HEAD_SHA" \
-            --arg run_url "$RUN_URL" \
-            --arg analyzed_at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-            '{
-              schema_version: 1,
-              category: "upstream",
-              confidence: "high",
-              summary: "[mock] test-L3-xfail fails on purpose (exit 1) to exercise CRCR failure reporting; this verdict is attached by the crcr-test workflow to exercise the triage-verdict path.",
-              suspected_upstream: {
-                pr: $pr,
-                commit: $sha,
-                reason: "mock: blames the PR under test"
-              },
-              evidence: [{
-                job: "test-L3-xfail-checkrun-creation",
-                log_url: $run_url,
-                excerpt: "Process completed with exit code 1."
-              }],
-              reproduced_on_retry: false,
-              analyzer: {name: "crcr-test-mock-triage", version: "0.0.1"},
-              analyzed_at: $analyzed_at
-            }')
-          echo "verdict=$verdict" >> "$GITHUB_OUTPUT"
+          set -o pipefail
+          { sleep 15; echo "::error::test-L3-xfail fails on purpose (exit 1)"; exit 1; } 2>&1 \
+            | tee "${RUNNER_TEMP}/work.log"
+      # A model explains the failure BEFORE it is reported, so the verdict goes out with
+      # this job's own completed callback, and the relay validates it and HUD shows it in
+      # this job's tooltip.
+      - name: Triage the failure
+        id: triage
+        if: failure()
+        uses: ./.github/actions/triage-verdict
+        with:
+          log-file: ${{ runner.temp }}/work.log
       - if: always()
         uses: pytorch/test-infra/.github/actions/cross-repo-ci-relay-callback@main
         with:

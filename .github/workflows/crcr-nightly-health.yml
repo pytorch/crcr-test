@@ -105,12 +105,34 @@ jobs:
     name: "xfail-nightly-callback"
     needs: [resolve-sha, test-nightly-multi-job-callback]
     runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      actions: read   # this run's job list, for the skill's input
+      id-token: write # Bedrock, and the callback's own token
     steps:
-      - name: Simulate failed nightly job
+      - uses: actions/checkout@v4
+
+      - name: Simulate a real nightly failure
+        id: sim
+        continue-on-error: true
         run: |
-          echo "Simulating a failed nightly test run..."
-          sleep 5
-          echo "Done (reporting failure conclusion, job itself succeeds)."
+          set -o pipefail
+          {
+            echo "Simulating a failed nightly test run..."
+            sleep 5
+            echo "::error::xfail-nightly-callback fails on purpose (exit 1)"
+            exit 1
+          } 2>&1 | tee "${RUNNER_TEMP}/work.log"
+
+      # Explains the failure with a model BEFORE it is reported, so the verdict goes out with
+      # this job's own completed callback.
+      - name: Triage the failure
+        id: triage
+        if: steps.sim.outcome == 'failure'
+        uses: ./.github/actions/triage-verdict
+        with:
+          log-file: ${{ runner.temp }}/work.log
 
       - name: Report failure to CRCR
         if: always()
@@ -121,6 +143,7 @@ jobs:
           delivery-id: ${{ needs.resolve-sha.outputs.sha }}
           event-type: nightly
           job-name: xfail-nightly-callback
+          triage-verdict: ${{ steps.triage.outputs.verdict }}
 
   xcancel-nightly-callback:
     name: "xcancel-nightly-callback"

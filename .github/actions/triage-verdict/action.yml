@@ -1,0 +1,159 @@
+# The job needs `actions/checkout` first (the skill and the schema are read from the
+# checkout) and the permissions `actions: read` and `id-token: write`. See the README
+# for an example.
+#
+# Keep ${{ }} out of the `description` fields below: GitHub evaluates them as
+# expressions when it loads this file, and most contexts are not available there.
+
+name: Triage verdict
+
+description: >
+  Explain why the job running this step failed, and return a CRCR triage-verdict
+  (schema version 1) for the `triage-verdict` input of the cross-repo-ci-relay-callback
+  action. A model reads the failure through the crcr-test-failure-triage skill and must
+  answer through a structured output tool whose parameters are the verdict schema. Run it
+  as a step of the failing job, before the callback. The analysis is advisory: this
+  action never fails the job, and without a verdict the output is empty, which the
+  callback ignores.
+
+inputs:
+  log-file:
+    description: >
+      File holding the failed job's output, e.g. the `tee` target of the failing step. This
+      job is still running, so GitHub has no log for it yet.
+    required: true
+  aws-role-arn:
+    description: >
+      AWS role that trusts this repository's GitHub OIDC identity and grants Bedrock
+      access. The default is the role the vLLM triage workflow in pytorch/test-infra uses.
+    required: false
+    default: arn:aws:iam::308535385114:role/gha_workflow_claude_code
+  model:
+    description: Bedrock model or inference profile ID. Claude Haiku 5.5 by default.
+    required: false
+    default: global.anthropic.claude-haiku-5-5
+  effort:
+    description: Reasoning effort (low, medium, high, max).
+    required: false
+    default: medium
+
+outputs:
+  verdict:
+    description: The verdict as one line of JSON, or empty when there is none.
+    value: ${{ steps.verdict.outputs.verdict }}
+
+runs:
+  using: composite
+  steps:
+    # This runs after a failed step, so every step condition below says `always()` and
+    # names the earlier step's result instead of relying on the default `success()`.
+    #
+    # This job is still running, so GitHub has no log or conclusion for it yet: give the
+    # model the job list from the API plus the output captured by the caller.
+    - name: Collect the failure for the analysis
+      id: collect
+      if: always()
+      continue-on-error: true
+      shell: bash
+      env:
+        GH_TOKEN: ${{ github.token }}
+        LOG_FILE: ${{ inputs.log-file }}
+        CHECK_RUN_ID: ${{ job.check_run_id }}
+        JOB_KEY: ${{ github.job }}
+      run: |
+        in="${RUNNER_TEMP}/triage-in"
+        mkdir -p "${in}/logs"
+        gh run view "${GITHUB_RUN_ID}" --repo "${GITHUB_REPOSITORY}" \
+          --json attempt,displayTitle,event,jobs,name,url,workflowName \
+          > "${in}/run.json"
+        # Find this job in the run: by its id, else by its key. The id is what tells
+        # apart matrix legs and jobs with a display name.
+        name=$(jq -r --arg id "${CHECK_RUN_ID}" \
+          '[.jobs[] | select((.databaseId | tostring) == $id) | .name] | first // empty' "${in}/run.json")
+        if [[ -n "${name}" ]]; then
+          echo "Matched this job by id ${CHECK_RUN_ID}: ${name}"
+        else
+          name="${JOB_KEY}"
+          echo "No job with id '${CHECK_RUN_ID}' in the run; using the job key: ${name}"
+        fi
+        safe=$(printf '%s' "${name}" | tr -c 'A-Za-z0-9._-' '_')
+        if [[ -f "${LOG_FILE}" ]]; then
+          tail -c 60000 "${LOG_FILE}" > "${in}/logs/${safe}.log"
+        else
+          echo "::warning::log-file '${LOG_FILE}' does not exist; the model will get no output to read."
+          echo "(no output was captured)" > "${in}/logs/${safe}.log"
+        fi
+        echo "job-name=${name}" >> "${GITHUB_OUTPUT}"
+        # The verdict format, as the parameters of the tool the model must call.
+        echo "TRIAGE_SCHEMA=$(jq -c . .claude/skills/crcr-test-failure-triage/verdict.schema.json)" >> "${GITHUB_ENV}"
+
+    - name: Configure AWS credentials via OIDC
+      if: always() && steps.collect.outcome == 'success'
+      continue-on-error: true
+      uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+      with:
+        role-to-assume: ${{ inputs.aws-role-arn }}
+        aws-region: us-east-1
+
+    # --json-schema makes Claude Code add a StructuredOutput tool whose parameters are the
+    # verdict schema. The model must call it, an invalid call is rejected and retried, and
+    # the step fails if no valid call is made. With that as its only way to answer, the
+    # model needs no Write tool.
+    - name: Root-cause analysis
+      id: claude
+      if: always() && steps.collect.outcome == 'success'
+      continue-on-error: true
+      uses: anthropics/claude-code-action@9ca9355b36297178e28d37c799d1c9c8a28e6507 # Claude Code 2.1.280
+      with:
+        use_bedrock: "true"
+        show_full_output: "true"
+        # Our own token, so the action does not depend on the Claude GitHub App being
+        # installed on this repository.
+        github_token: ${{ github.token }}
+        claude_args: >-
+          --model ${{ inputs.model }}
+          --effort ${{ inputs.effort }}
+          --allowedTools "Read,Glob,Grep"
+          --disallowedTools "Agent,Task"
+          --json-schema '${{ env.TRIAGE_SCHEMA }}'
+        prompt: |
+          Read .claude/skills/crcr-test-failure-triage/SKILL.md and follow it.
+
+          Input directory ($IN): ${{ runner.temp }}/triage-in
+            - run.json   this run's jobs and steps. The job that failed is
+                         `${{ steps.collect.outputs.job-name }}`; its conclusion is still
+                         empty because it is the one running this analysis.
+            - logs/      the end of that job's captured output
+
+          Return your verdict through the structured output tool.
+
+    # The sender, not the model, stamps the time and model name. `jq -c` prints one line,
+    # so a hostile verdict cannot add keys to GITHUB_OUTPUT. The relay is the final
+    # validator.
+    - name: Pick the verdict
+      id: verdict
+      if: always() && steps.collect.outcome == 'success'
+      continue-on-error: true
+      shell: bash
+      env:
+        RESULT: ${{ steps.claude.outputs.structured_output }}
+        MODEL: ${{ inputs.model }}
+        # Written by the action even when it fails; the `execution_file` output is not.
+        EXEC_FILE: ${{ runner.temp }}/claude-execution-output.json
+      run: |
+        if [[ -z "${RESULT}" ]]; then
+          # What the model run itself ended with, e.g. an API or account error. The text
+          # is untrusted, so flatten it to one line and cap it.
+          reason=""
+          if [[ -s "${EXEC_FILE}" ]]; then
+            reason=$(jq -r '[.[] | select(.type == "result")] | last
+              | "\(.subtype // "?") is_error=\(.is_error // false) \(.api_error_code // "") \(.result // "")"' \
+              "${EXEC_FILE}" 2>/dev/null | tr '\n\r' '  ' | cut -c1-800 || true)
+          fi
+          echo "::warning::The analysis returned no verdict. The model run ended with: ${reason:-unknown}"
+          exit 0
+        fi
+        jq -r '"**\(.category)** (\(.confidence)): \(.summary)"' <<< "${RESULT}" >> "${GITHUB_STEP_SUMMARY}"
+        verdict=$(jq -c --arg at "$(date -u +%Y-%m-%dT%H:%M:%SZ)" --arg model "${MODEL}" \
+          '.analyzed_at = $at | .analyzer.model = $model' <<< "${RESULT}")
+        echo "verdict=${verdict}" >> "${GITHUB_OUTPUT}"

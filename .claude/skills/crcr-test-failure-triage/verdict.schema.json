@@ -1,0 +1,144 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "crcr-test triage verdict",
+  "description": "Why the failed job failed, in the CRCR triage-verdict format (schema_version 1). The relay drops the whole verdict on any violation of this schema.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "category",
+    "confidence",
+    "summary"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "category": {
+      "enum": [
+        "upstream",
+        "backend",
+        "infra",
+        "flake",
+        "unknown"
+      ],
+      "description": "upstream: the pytorch/pytorch change under test caused it. backend: crcr-test itself. infra: GitHub Actions, the relay, the callback action, rate limits. flake: nondeterministic, no concrete cause. unknown: the evidence does not say."
+    },
+    "confidence": {
+      "enum": [
+        "high",
+        "medium",
+        "low"
+      ],
+      "description": "high: the log shows the error and the cause is clear. medium: inferred. low: guessing, in which case category should be unknown."
+    },
+    "summary": {
+      "type": "string",
+      "maxLength": 1000,
+      "description": "Plain text, what failed and why. No @handles.",
+      "pattern": "\\S"
+    },
+    "suspected_upstream": {
+      "type": "object",
+      "additionalProperties": false,
+      "anyOf": [
+        {
+          "properties": {
+            "pr": {}
+          },
+          "required": [
+            "pr"
+          ]
+        },
+        {
+          "properties": {
+            "commit": {}
+          },
+          "required": [
+            "commit"
+          ]
+        }
+      ],
+      "description": "Only with category upstream. Needs a pr or a commit.",
+      "properties": {
+        "pr": {
+          "type": "integer",
+          "minimum": 1
+        },
+        "commit": {
+          "type": "string",
+          "pattern": "^[0-9a-fA-F]{7,40}$"
+        },
+        "reason": {
+          "type": "string",
+          "maxLength": 300,
+          "pattern": "\\S"
+        }
+      }
+    },
+    "evidence": {
+      "type": "array",
+      "maxItems": 5,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "minProperties": 1,
+        "properties": {
+          "job": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "\\S"
+          },
+          "test": {
+            "type": "string",
+            "maxLength": 200,
+            "pattern": "\\S"
+          },
+          "excerpt": {
+            "type": "string",
+            "maxLength": 1000,
+            "description": "A log line copied verbatim. No @handles.",
+            "pattern": "\\S"
+          },
+          "log_url": {
+            "type": "string",
+            "maxLength": 500,
+            "pattern": "^https?://[^\\x00-\\x20@/?#\\[\\]]+([/?#][^\\x00-\\x20]*)?$",
+            "description": "The job url from run.json."
+          }
+        }
+      }
+    },
+    "analyzer": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "name": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "\\S"
+        },
+        "version": {
+          "type": "string",
+          "maxLength": 200,
+          "pattern": "\\S"
+        }
+      }
+    }
+  },
+  "if": {
+    "properties": {
+      "suspected_upstream": {}
+    },
+    "required": [
+      "suspected_upstream"
+    ]
+  },
+  "then": {
+    "properties": {
+      "category": {
+        "const": "upstream"
+      }
+    }
+  }
+}
