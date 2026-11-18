@@ -105,6 +105,7 @@ jobs:
     name: "xfail-nightly-callback"
     needs: [resolve-sha, test-nightly-multi-job-callback]
     runs-on: ubuntu-latest
+    environment: bedrock   # OIDC subject the Bedrock role trusts: repo:pytorch/crcr-test:environment:bedrock
     timeout-minutes: 10
     permissions:
       contents: read
