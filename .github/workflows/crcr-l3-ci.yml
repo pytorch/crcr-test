@@ -64,6 +64,7 @@ jobs:
       contains(github.event.client_payload.payload.pull_request.labels.*.name,
       'ciflow/crcr/crcr-test')
     runs-on: ubuntu-latest
+    environment: bedrock   # OIDC subject the Bedrock role trusts: repo:pytorch/crcr-test:environment:bedrock
     timeout-minutes: 10
     permissions:
       contents: read

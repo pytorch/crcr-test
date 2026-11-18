@@ -1,6 +1,6 @@
 # The job needs `actions/checkout` first (the skill and the schema are read from the
-# checkout) and the permissions `actions: read` and `id-token: write`. See the README
-# for an example.
+# checkout), the permissions `actions: read` and `id-token: write`, and `environment:
+# bedrock` (the Bedrock role only trusts that OIDC subject). See the README for an example.
 #
 # Keep ${{ }} out of the `description` fields below: GitHub evaluates them as
 # expressions when it loads this file, and most contexts are not available there.

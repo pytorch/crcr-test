@@ -210,7 +210,7 @@ A job that really fails can analyze its own failure **before it reports**: the [
 
 Two jobs use it today: `xfail-nightly-callback` and `test-L3-xfail-checkrun-creation`. Both fail a step on purpose; the nightly one marks that step `continue-on-error`, so the job itself stays green and reports `failure` through the callback, as before. The other jobs are simple probes.
 
-**Using it in another job** (for example a failing L3 or L4 job). The job must check out the repository first (the skill and its schema are read from the checkout), have the permissions `actions: read` and `id-token: write`, and write the output of the work that can fail to a file. Then add one step between that work and the callback:
+**Using it in another job** (for example a failing L3 or L4 job). The job must check out the repository first (the skill and its schema are read from the checkout), have the permissions `actions: read` and `id-token: write`, run in the `bedrock` environment (`environment: bedrock`, the OIDC subject the Bedrock role trusts is `repo:pytorch/crcr-test:environment:bedrock`), and write the output of the work that can fail to a file. Then add one step between that work and the callback:
 
 ```yaml
 - run: |   # the work that can fail
